@@ -10369,7 +10369,13 @@ def _timer_duration_days(record):
 def _timer_anchor_ts(record):
     """Return the one UTC anchor for the record's current timer cycle."""
     if bool(getattr(record, 'start_on_first_use', False)):
-        return to_ts(getattr(record, 'first_used_at', None))
+        first = to_ts(getattr(record, 'first_used_at', None))
+        if not first:
+            return None          # not used yet: timer has not started
+        # After first use the cycle can be restarted (renewal / edit of the
+        # duration): the later of first use and the explicit restart wins.
+        started = to_ts(getattr(record, 'timer_started_at', None)) or 0
+        return max(first, started)
 
     return (
         to_ts(getattr(record, 'timer_started_at', None))
@@ -24100,6 +24106,29 @@ def api_edit(pid):
 
     p = db.session.get(Peer, pid) or abort(404)
 
+    # Renewal intent. The bot renews by sending the new total duration; for an
+    # EXPIRED service on the same plan length that value equals the stored one,
+    # so it looked like "no change" and the customer stayed blocked after paying.
+    #   * "renew": true  -> always restart the timer from now
+    #   * fallback for older bots: expired + full duration sent (days/hours/
+    #     minutes, the panel's own edit form never sends minutes)
+    try:
+        _exp_before = _effective_expiry_ts(p)
+    except Exception:
+        _exp_before = None
+    _renew_flag = str(data.get('renew', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    force_timer_restart = bool(
+        ('time_limit_days' in data or 'time_limit_hours' in data)
+        and (
+            _renew_flag
+            or (
+                'time_limit_minutes' in data
+                and _exp_before is not None
+                and _exp_before <= now_ts()
+            )
+        )
+    )
+
     original = {
         'name': p.name,
         'address': p.address,
@@ -24410,6 +24439,9 @@ def api_edit(pid):
             field
         )
 
+    if force_timer_restart and 'time_limit_days' not in changed:
+        changed.append('time_limit_days')
+
     if not changed:
         return jsonify(
             success=True,
@@ -24453,11 +24485,12 @@ def api_edit(pid):
                 _clear_timer_cycle(p)
 
             else:
-                if getattr(p, 'start_on_first_use', False):
-                    p.timer_started_at = getattr(p, 'first_used_at', None)
-                    _sync_effective_expiry(p)
-                else:
-                    _start_timer_cycle(p)
+                # Already started (first use happened, or not a first-use
+                # peer): the new duration counts from NOW, for both kinds.
+                # The bot renews by sending "remaining + added" days; anchoring
+                # first-use peers at first_used_at cut renewals short and left
+                # expired first-use customers blocked after paying.
+                _start_timer_cycle(p)
 
         else:
             _clear_timer_cycle(p)

@@ -15940,6 +15940,26 @@ def _repair_legacy_timer_rows():
         'subscriptions': repaired_subscriptions,
     }
 
+def _perf_indexes():
+    """Indexes for lookups that used to scan whole tables. peer_event grows
+    forever (one row per renew/block/edit), and every peer delete, bulk delete
+    and peer-log view did `WHERE peer_id = ?` without an index while holding
+    the SQLite write lock - that froze the panel and the bot on big installs."""
+    stmts = (
+        'CREATE INDEX IF NOT EXISTS ix_peer_event_peer_id ON peer_event (peer_id, id)',
+        'CREATE INDEX IF NOT EXISTS ix_peer_public_key ON peer (public_key)',
+        'CREATE INDEX IF NOT EXISTS ix_peer_name ON peer (name)',
+        'CREATE INDEX IF NOT EXISTS ix_peer_status ON peer (status)',
+        'CREATE INDEX IF NOT EXISTS ix_admin_log_at ON admin_log (at)',
+    )
+    for sql in stmts:
+        try:
+            with db.engine.begin() as conn:
+                conn.execute(text(sql))
+        except Exception:
+            app.logger.debug('Index not created: %s', sql, exc_info=True)
+
+
 # -----------
 # Bootstrap
 # ___________
@@ -15953,6 +15973,7 @@ def _migrate_schema():
         _repair_legacy_timer_rows()
     except Exception as exc:
         raise SchemaMigrationError(str(exc)) from exc
+    _perf_indexes()
 
     app.logger.info("DB initialized / migrated OK")
 

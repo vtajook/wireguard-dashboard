@@ -61,3 +61,4 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Traffic is saved right before an interface goes down (resize / down / delete); before, the traffic since the last sample was lost.
 - Dashboard peer counters: Total fixed (was always 0), uses the shared WireGuard snapshot, Offline tooltip shows idle vs disabled.
 - Users page opens faster with thousands of peers.
+- Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.

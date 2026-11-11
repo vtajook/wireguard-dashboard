@@ -239,7 +239,12 @@ async function peerCounts(scope) {
     setText('count-online',  String(c.online  ?? 0));
     setText('count-offline', String(c.offline ?? 0));
     setText('count-blocked', String(c.blocked ?? 0));
-    setText('count-total',   String(c.total   ?? 0));
+    const total = c.total ?? ((c.online ?? 0) + (c.offline ?? 0) + (c.blocked ?? 0));
+    setText('count-total',   String(total));
+    const offBox = document.getElementById('count-offline')?.closest('.ov-peer');
+    if (offBox && c.idle != null) {
+      offBox.title = `Not connected now: ${c.idle} idle (enabled, no handshake in 3 min) + ${c.disabled ?? 0} disabled by admin`;
+    }
   } catch (e) {
     console.error(e);
   }

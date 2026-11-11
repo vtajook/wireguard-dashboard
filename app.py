@@ -19958,99 +19958,71 @@ def _rate_mb(cur_bytes, prev_bytes, dt):
 @app.get('/api/peer_counts')
 @login_required
 def api_peer_counts():
+    """Peer counters for the dashboard, across EVERY local interface.
+
+    online   = enabled and handshake within the last 180s
+    offline  = everything else that is not blocked (idle + admin-disabled)
+    idle     = enabled but no recent handshake
+    disabled = turned off by the admin (status 'offline')
+    blocked  = auto-blocked (time/data exhausted)
+    total    = all peers (online + offline + blocked)
+    """
     scope = (request.args.get('scope') or 'local').strip().lower()
-
-    ACTIVE_WITHIN_SECONDS = 180
-
-    def _wg_dump_all():
-        try:
-            p = subprocess.run(
-                ['wg', 'show', 'all', 'dump'],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            )
-            if p.returncode != 0:
-                return {}
-            m = {}
-            for raw in (p.stdout or '').splitlines():
-                if not raw.strip():
-                    continue
-                parts = raw.split('\t')
-                if len(parts) < 9:
-                    continue
-                iface = parts[0]
-                pubkey = parts[1]
-                try:
-                    hs = int(parts[5] or '0')
-                except Exception:
-                    hs = 0
-                m.setdefault(iface, {})[pubkey] = hs
-            return m
-        except Exception:
-            return {}
-
-    def _counts_peers(peer_rows, hs_map):
-        now = int(time.time())
-        out = {'online': 0, 'offline': 0, 'blocked': 0}
-        for st, pubkey, ifname in peer_rows:
-            st = (st or 'offline').lower()
-            if st == 'blocked':
-                out['blocked'] += 1
-                continue
-
-            hs = 0
-            try:
-                hs = int((hs_map.get(ifname) or {}).get(pubkey) or 0)
-            except Exception:
-                hs = 0
-
-            if hs and (now - hs) <= ACTIVE_WITHIN_SECONDS:
-                out['online'] += 1
-            else:
-                out['offline'] += 1
-        return out
-
-    base_rows = db.session.query(Peer.status, Peer.public_key, InterfaceConfig.name).join(InterfaceConfig)
-
     if scope not in ('local', 'nodes', 'total'):
         return jsonify(error="invalid_scope", allow=['local', 'nodes', 'total']), 400
 
-    if scope == 'nodes':
-        q = db.session.query(Peer.status, func.count(Peer.id)).join(InterfaceConfig)
-        q = q.filter(InterfaceConfig.name.op('REGEXP')('^n[0-9]+:'))
-        rows = q.group_by(Peer.status).all()
-        counts = {'online': 0, 'offline': 0, 'blocked': 0}
-        for st, c in rows:
-            st = (st or '').lower()
-            if st in counts:
-                counts[st] = int(c)
-        return jsonify(counts=counts), 200
+    ACTIVE_WITHIN_SECONDS = 180
+    node_re = re.compile(r'^n[0-9]+:')
 
-    hs_map = _wg_dump_all()
+    def _empty():
+        return {'online': 0, 'offline': 0, 'blocked': 0, 'idle': 0, 'disabled': 0, 'total': 0}
 
-    local_rows = base_rows.filter(~InterfaceConfig.name.op('REGEXP')('^n[0-9]+:')).all()
-    local_counts = _counts_peers(local_rows, hs_map)
+    rows = db.session.query(Peer.status, Peer.public_key, InterfaceConfig.name).join(InterfaceConfig).all()
+
+    # Shared, cached `wg show all dump` (the old private copy had a 2s timeout:
+    # on a busy server with thousands of peers it timed out and EVERY peer was
+    # shown as offline).
+    dump = _wg_dump_all() if scope != 'nodes' else None
+    runtime_ok = dump is not None
+    dump = dump or {}
+    now = int(time.time())
+
+    local, nodes = _empty(), _empty()
+    for st, pubkey, ifname in rows:
+        st = (st or 'offline').lower()
+        is_node = bool(node_re.match(ifname or ''))
+        out = nodes if is_node else local
+        out['total'] += 1
+        if st == 'blocked':
+            out['blocked'] += 1
+            continue
+        if st != 'online':
+            out['disabled'] += 1
+            out['offline'] += 1
+            continue
+        if is_node:
+            # no runtime data for remote nodes here: count enabled as online
+            out['online'] += 1
+            continue
+        hs = 0
+        try:
+            v = (dump.get(ifname) or {}).get(pubkey)
+            hs = int((v[0] if isinstance(v, (tuple, list)) else v) or 0)
+        except Exception:
+            hs = 0
+        if hs and (now - hs) <= ACTIVE_WITHIN_SECONDS:
+            out['online'] += 1
+        else:
+            out['idle'] += 1
+            out['offline'] += 1
 
     if scope == 'local':
-        return jsonify(counts=local_counts), 200
-
-    qn = db.session.query(Peer.status, func.count(Peer.id)).join(InterfaceConfig)
-    qn = qn.filter(InterfaceConfig.name.op('REGEXP')('^n[0-9]+:'))
-    rowsn = qn.group_by(Peer.status).all()
-    node_counts = {'online': 0, 'offline': 0, 'blocked': 0}
-    for st, c in rowsn:
-        st = (st or '').lower()
-        if st in node_counts:
-            node_counts[st] = int(c)
-
-    counts = {
-        'online':  int(local_counts['online']  + node_counts['online']),
-        'offline': int(local_counts['offline'] + node_counts['offline']),
-        'blocked': int(local_counts['blocked'] + node_counts['blocked']),
-    }
-    return jsonify(counts=counts), 200
+        counts = local
+    elif scope == 'nodes':
+        counts = nodes
+    else:
+        counts = {k: int(local[k] + nodes[k]) for k in local}
+    return jsonify(counts=counts, runtime_ok=runtime_ok), 200
 
 
 @app.route('/api/nodes/<int:nid>/iface/<name>/logs', methods=['GET', 'DELETE'])

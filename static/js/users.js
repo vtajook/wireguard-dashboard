@@ -3315,15 +3315,37 @@
       } else {
         container.querySelector(".empty-peers")?.remove();
 
+        /* [perf] Build all new cards with ONE HTML parse, keep them hidden
+           (pagination shows the current page right after this loop) and fill
+           in details only when a card is actually shown. With ~2000 peers the
+           old one-by-one build + full update + layout took several seconds. */
+        const freshCards = new Map();
+        const missing = [];
+        peers.forEach((p, i) => { if (!existing.has(peerDomKey(p))) missing.push([p, i]); });
+        if (missing.length > 1) {
+          const tpl = document.createElement("template");
+          tpl.innerHTML = missing.map(([p, i]) => cardHTML(p, i)).join("");
+          const kids = Array.from(tpl.content.children);
+          if (kids.length === missing.length) {
+            missing.forEach(([p], k) => freshCards.set(peerDomKey(p), kids[k]));
+          }
+        }
+
         peers.forEach((p, i) => {
           const idStr = peerDomKey(p);
           let card = existing.get(idStr);
+          let isNew = false;
 
           if (!card) {
-            const wrap = document.createElement("div");
-            wrap.innerHTML = cardHTML(p, i);
-            card = wrap.firstElementChild;
+            card = freshCards.get(idStr);
+            if (!card) {
+              const wrap = document.createElement("div");
+              wrap.innerHTML = cardHTML(p, i);
+              card = wrap.firstElementChild;
+            }
+            card.style.display = "none";
             container.appendChild(card);
+            isNew = true;
           } else if (!quiet) {
             const expected = container.children[i];
             if (expected !== card) container.insertBefore(card, expected || null);
@@ -3332,7 +3354,7 @@
           if (!quiet || card.dataset.order == null || card.dataset.order === '') {
             card.dataset.order = String(i);
           }
-          if (quiet && card.style.display === "none") {
+          if (isNew || (quiet && card.style.display === "none")) {
             wgpUpdateCardData(card, p);
             card._wgpPending = [p, i];
           } else {

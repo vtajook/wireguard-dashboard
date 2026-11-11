@@ -1,4 +1,4 @@
-"""Read-only peer-specific connection diagnosis for WG Panel."""
+"""Read-only peer-specific connection diagnosis for WireGuard Dashboard."""
 from __future__ import annotations
 import ipaddress
 import json

@@ -208,7 +208,7 @@ target = pathlib.Path(sys.argv[2])
 
 request = urllib.request.Request(
     url,
-    headers={"User-Agent": "WG-Panel-Bootstrap"},
+    headers={"User-Agent": "WireGuard-Dashboard-Bootstrap"},
 )
 
 with urllib.request.urlopen(request, timeout=180) as response:

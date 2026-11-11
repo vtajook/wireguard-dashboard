@@ -3275,7 +3275,7 @@ def _node_update_source() -> dict:
 def _node_latest_version():
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "WG-Panel-Node",
+        "User-Agent": "WireGuard-Dashboard-Node",
         "Cache-Control": "no-cache",
     }
 
@@ -6639,8 +6639,8 @@ if __name__ == "__main__":
         "preload_app": False,
         "capture_output": True,
     }
-    certfile = (os.getenv("AGENT_SSL_CERT") or "").strip()   # e.g. /etc/letsencrypt/live/agent.azumi.com/fullchain.pem
-    keyfile  = (os.getenv("AGENT_SSL_KEY")  or "").strip()   # e.g. /etc/letsencrypt/live/agent.azumi.com/privkey.pem
+    certfile = (os.getenv("AGENT_SSL_CERT") or "").strip()   # e.g. /etc/letsencrypt/live/agent.example.com/fullchain.pem
+    keyfile  = (os.getenv("AGENT_SSL_KEY")  or "").strip()   # e.g. /etc/letsencrypt/live/agent.example.com/privkey.pem
     cafile   = (os.getenv("AGENT_SSL_CA")   or "").strip()   
 
     if certfile and keyfile:

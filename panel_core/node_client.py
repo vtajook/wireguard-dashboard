@@ -1,4 +1,4 @@
-"""Authenticated HTTP client for WG Panel remote nodes"""
+"""Authenticated HTTP client for WireGuard Dashboard remote nodes"""
 from __future__ import annotations
 import json
 import requests

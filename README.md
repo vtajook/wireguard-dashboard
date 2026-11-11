@@ -1,9 +1,9 @@
-![R (2)](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/a064577c-9302-4f43-b3bf-3d4f84245a6f)
-نام پروژه : پنل وایرگارد
+# WireGuard Dashboard
+
+وایرگارد داشبورد — پنل مدیریت وایرگارد
 
 ---
 
-![check](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/13de8d36-dcfe-498b-9d99-440049c0cf14)
 **امکانات**
 
 <div dir="rtl" align="right">
@@ -241,7 +241,7 @@ client.example.com:51820
 <div dir="ltr" align="left">
 
 ```
-sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.sh)"'
+sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/wg.sh)"'
 ```
 
 </div>
@@ -269,7 +269,7 @@ wgpanel
 <div dir="ltr" align="left">
 
 ```
-sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/agent/node.sh)"'
+sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/agent/node.sh)"'
 ```
 
 </div>
@@ -294,12 +294,11 @@ node
 
 ------------------------------------ 
 
-  ![6348248](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/398f8b07-65be-472e-9821-631f7b70f783)
 **آموزش نصب پنل با اسکریپت**
 
  <div align="right">
   <details>
-    <summary><strong><img src="https://github.com/Azumi67/Rathole_reverseTunnel/assets/119934376/fcbbdc62-2de5-48aa-bbdd-e323e96a62b5" alt="Image"> </strong>نحوه نصب با install everything</summary>
+    <summary><strong></strong>نحوه نصب با install everything</summary>
 
 ------------------
 - پس از انکه گزینه install everything را انتخاب کردید نخست پیش نیاز ها را نصب میکند و از شما سوال میکند که پروژه را clone کند یا خیر

@@ -671,7 +671,7 @@ def clone_repo() -> bool:
     header("Git Clone / Reuse", REPO_URL)
     print(box("Tips", [
         c("Choose the FULL target folder path.", BR_WHT),
-        c("Existing WG Panel installations are reused, not overwritten.", BR_GRN),
+        c("Existing WireGuard Dashboard installations are reused, not overwritten.", BR_GRN),
         c("Old launcher-only venv/.cache folders can be moved aside safely.", BR_YEL),
         "",
         c("Recommended:", BR_YEL) + " " + c(_paths(default_target), BR_CYN),
@@ -692,7 +692,7 @@ def clone_repo() -> bool:
         return False
 
     if target.is_dir() and (target / "app.py").is_file() and (target / "requirements.txt").is_file():
-        info(f"Existing WG Panel installation: {_paths(str(target))}")
+        info(f"Existing WireGuard Dashboard installation: {_paths(str(target))}")
         set_project(target)
         ok("Existing installation selected; no application data was changed.")
         if (target / ".git").is_dir():
@@ -750,7 +750,7 @@ def clone_repo() -> bool:
                 err("Cannot inspect the existing installation directory.")
                 pause()
                 return False
-            warn("The install directory contains files, but is not a complete WG Panel installation.")
+            warn("The install directory contains files, but is not a complete WireGuard Dashboard installation.")
             info("Existing entries: " + ", ".join(entries[:12]) + (" ..." if len(entries) > 12 else ""))
             warn("They may include configuration, databases, or private keys; nothing will be deleted.")
             if not confirm("Move the ENTIRE directory to a timestamped backup and clone fresh?", default_yes=False):
@@ -2020,7 +2020,7 @@ def _panel_service(root: Path) -> bool:
     svc_group = ask("Service group", default="root", show_default=True).strip() or "root"
 
     unit = f"""[Unit]
-Description=WG Panel (app.py launcher)
+Description=WireGuard Dashboard (app.py launcher)
 After=network-online.target
 Wants=network-online.target
 
@@ -2096,7 +2096,7 @@ def _bot_service(root: Path) -> bool:
     svc_group = ask("Service group", default="root", show_default=True).strip() or "root"
 
     unit = f"""[Unit]
-Description=WG Panel Telegram Bot
+Description=WireGuard Dashboard Telegram Bot
 After=network-online.target
 Wants=network-online.target
 
@@ -3327,7 +3327,7 @@ def _restart_related_panel_services() -> bool:
     services = _related_panel_services()
 
     if not services:
-        warn("No WG Panel systemd services were found. Restart skipped.")
+        warn("No WireGuard Dashboard systemd services were found. Restart skipped.")
         return True
 
     all_ok = True
@@ -3553,7 +3553,7 @@ def _github_json(url: str, timeout: int = 20):
         url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "WG-Panel-Installer",
+            "User-Agent": "WireGuard-Dashboard-Installer",
         },
     )
 
@@ -3681,7 +3681,7 @@ def _download_file(url: str, target: Path) -> None:
         url,
         headers={
             "Accept": "application/zip",
-            "User-Agent": "WG-Panel-Installer",
+            "User-Agent": "WireGuard-Dashboard-Installer",
         },
     )
 
@@ -3807,7 +3807,7 @@ def _extract_release_zip(
 
 def update_project(root: Path):
     """
-    Update WG Panel to the latest main-branch version.
+    Update WireGuard Dashboard to the latest main-branch version.
 
     Update never shows a release/version list.
     """
@@ -3829,7 +3829,7 @@ def update_project(root: Path):
     root = root.resolve()
 
     if not root.is_dir() or not (root / "app.py").is_file():
-        err("The active WG Panel project root is invalid.")
+        err("The active WireGuard Dashboard project root is invalid.")
         pause()
         return
 
@@ -3879,7 +3879,7 @@ def update_project(root: Path):
                 REPO_URL,
                 str(source),
             ],
-            "Download latest WG Panel",
+            "Download latest WireGuard Dashboard",
             timeout=600,
         )
 
@@ -3913,7 +3913,7 @@ def update_project(root: Path):
 
 def downgrade_project(root: Path):
     """
-    Downgrade WG Panel to a selected published GitHub release.
+    Downgrade WireGuard Dashboard to a selected published GitHub release.
     """
     if not isitroot():
         err("Downgrade requires sudo/root.")
@@ -3928,7 +3928,7 @@ def downgrade_project(root: Path):
     root = root.resolve()
 
     if not root.is_dir() or not (root / "app.py").is_file():
-        err("The active WG Panel project root is invalid.")
+        err("The active WireGuard Dashboard project root is invalid.")
         pause()
         return
 
@@ -4351,7 +4351,7 @@ def main_menu():
     while True:
         root = get_project()
         clear()
-        print(c("WG Panel Control", BR_WHT + BOLD) + "  " + c("vtajook/wireguard-dashboard", BR_CYN))
+        print(c("WireGuard Dashboard Control", BR_WHT + BOLD) + "  " + c("vtajook/wireguard-dashboard", BR_CYN))
         print(hr("═", BR_CYN))
         print(render_status(root))
         print()

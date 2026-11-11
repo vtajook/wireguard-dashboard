@@ -1,5 +1,5 @@
 [Unit]
-Description=WG Panel (Flask + Gunicorn)
+Description=WireGuard Dashboard (Flask + Gunicorn)
 After=network.target
 
 [Service]

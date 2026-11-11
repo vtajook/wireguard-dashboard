@@ -1,8 +1,11 @@
-# wireguard-dashboard — WG_Panel fork of [Azumi67/WG_Panel](https://github.com/Azumi67/WG_Panel)
+# WireGuard Dashboard — Changelog
 
-This fork is based on upstream commit `f0f4106` and adds the following changes.
-The panel's built-in updater, installer and `wg` CLI pull from this repository
+The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
+
+## 2026-11 — first release
+
+- Renamed to **WireGuard Dashboard**.
 
 ## Speed / stability
 - Expiry & data-limit enforcement runs in one background enforcer (not inside HTTP requests).

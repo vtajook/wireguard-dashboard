@@ -297,7 +297,7 @@ def register_operations(app, context):
             shutil.copyfile(target, backup)
             os.chmod(backup, 0o600)
 
-        managed_content = "# Managed by WG Panel Operations\nnet.ipv4.ip_forward = 1\n"
+        managed_content = "# Managed by WireGuard Dashboard Operations\nnet.ipv4.ip_forward = 1\n"
         rollback = _write_snapshot("enable_ipv4_forwarding", {
             "runtime": before_runtime,
             "had_file": bool(backup),

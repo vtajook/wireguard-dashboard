@@ -51,7 +51,7 @@ download_node_py() {
   tmp="$(mktemp /tmp/wg-node-py.XXXXXX)"
   trap 'rm -f -- "$tmp"' EXIT
 
-  log "Downloading WG Panel node.py..."
+  log "Downloading WireGuard Dashboard node.py..."
 
   if command -v curl >/dev/null 2>&1; then
     curl -fL --retry 3 --connect-timeout 15 --max-time 120 \

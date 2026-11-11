@@ -21,7 +21,7 @@ from telegram.ext import (
     MessageHandler, filters
 )
 from telegram.error import BadRequest
-import telegram_admin as admin_azumi
+import telegram_admin as admin_ui
 import html as py_html
 import qrcode
 try:
@@ -956,7 +956,7 @@ async def cmd_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = await asyncio.to_thread(admin_azumi.render_list, globals(), 1, "")
+    text_out, keyboard = await asyncio.to_thread(admin_ui.render_list, globals(), 1, "")
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -968,7 +968,7 @@ async def cmd_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = await asyncio.to_thread(admin_azumi.diagnostics, globals())
+    text_out, keyboard = await asyncio.to_thread(admin_ui.diagnostics, globals())
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -1912,7 +1912,7 @@ def _github_source_info(*, fresh: bool = False) -> dict:
 
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "WG-Panel-Telegram-Bot",
+        "User-Agent": "WireGuard-Dashboard-Telegram-Bot",
     }
 
     errors = []
@@ -2442,7 +2442,7 @@ def _update_live_text(
     title = (
         f"⌘ <b>Updating node · {html(node_name or target_name)}</b>"
         if node_name
-        else "↑ <b>Updating WG Panel</b>"
+        else "↑ <b>Updating WireGuard Dashboard</b>"
     )
 
     message = str(
@@ -4187,7 +4187,7 @@ async def _send_zipfile(
     bio.seek(0)
 
     caption = "\n".join([
-        "▣ <b>WG Panel backup</b>",
+        "▣ <b>WireGuard Dashboard backup</b>",
         "",
         f"◇ Type      <code>{html(kind.title())}</code>",
         f"◇ File      <code>{html(filename)}</code>",
@@ -4436,7 +4436,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    if await admin_azumi.handle_callback(globals(), update, context):
+    if await admin_ui.handle_callback(globals(), update, context):
         return
 
     if data.startswith("security:"):
@@ -4703,7 +4703,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(
             update,
             (
-                "↑ <b>Updating WG Panel</b>\n\n"
+                "↑ <b>Updating WireGuard Dashboard</b>\n\n"
                 "○ <b>Starting updater…</b> · <code>2%</code>\n"
                 "<code>░░░░░░░░░░</code>\n\n"
                 "◷ <i>The request was accepted. Telegram will "
@@ -6799,7 +6799,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not selected:
             default = ""
     elif key == "telegram_id":
-        extra = "\n↗ Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@azumi, josh, @jackie</code>)."
+        extra = "\n↗ Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@ali, sara, @reza</code>)."
         if not selected:
             default = ""
 
@@ -7192,7 +7192,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "● <b>Policy created and applied.</b>\n\n" + out, kb)
             return
 
-    if await admin_azumi.handle_text(globals(), update, context):
+    if await admin_ui.handle_text(globals(), update, context):
         return
 
     stp1 = context.user_data.get(STATE.get("P_EDIT_ONE"))
@@ -7508,7 +7508,7 @@ def _new_panel_health_session():
     session.headers.update({
         "Authorization": f"Bearer {API_KEY}",
         "X-API-KEY": API_KEY,
-        "User-Agent": f"WG-Panel-Watchdog/{BOT_VERSION}",
+        "User-Agent": f"WireGuard-Dashboard-Watchdog/{BOT_VERSION}",
     })
     return session
 
@@ -8385,7 +8385,7 @@ def main():
         )
 
     logging.info(
-        "Starting WG Panel Telegram bot %s",
+        "Starting WireGuard Dashboard Telegram bot %s",
         BOT_VERSION,
     )
 

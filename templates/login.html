@@ -3,7 +3,7 @@
   <head>
     <script src="{{ url_for('static', filename='js/auth-appearance.js') }}"></script>
     <meta charset="utf-8" />
-    <title>WG Panel — Login</title>
+    <title>WireGuard Dashboard — Login</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
 
@@ -334,13 +334,13 @@
           /><img
             class="auth-modern-mark"
             src="{{ url_for('static', filename='img/workspace-mark.svg') }}"
-            alt="WG Panel"
+            alt="WireGuard Dashboard"
           />
         </div>
 
         <header class="auth-header">
           <h2>Welcome back</h2>
-          <div class="muted">Sign in to your WG Panel</div>
+          <div class="muted">Sign in to your WireGuard Dashboard</div>
         </header>
 
         {% with msgs = get_flashed_messages(with_categories=true) %} {% if msgs

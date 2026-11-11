@@ -1,4 +1,4 @@
-"""subscription policy for WG Panel"""
+"""subscription policy for WireGuard Dashboard"""
 from __future__ import annotations
 from typing import Any, Mapping
 

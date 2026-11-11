@@ -97,7 +97,7 @@ def _project_version() -> str:
 
 
 PANEL_VERSION = _project_version()
-# Updates come from this GitHub repo (fork of Azumi67/WG_Panel). Override with WG_PANEL_REPO.
+# Updates come from this GitHub repo. Override with WG_PANEL_REPO.
 PANEL_REPO = (os.getenv("WG_PANEL_REPO") or "vtajook/wireguard-dashboard").strip()
 PANEL_UPDATE_TTL = 1800
 _PANEL_UPDATE_CACHE = {
@@ -1379,7 +1379,7 @@ def _github_latest_panel_version():
 
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "WG-Panel",
+        "User-Agent": "WireGuard-Dashboard",
         "Cache-Control": "no-cache",
     }
 
@@ -3195,7 +3195,7 @@ def _http_security_nft_status(settings=None):
         base["privileged"] = True
         base["reason"] = "ready"
         base["detail"] = (
-            "WG Panel can read/manage nftables through "
+            "WireGuard Dashboard can read/manage nftables through "
             "the current service permissions."
         )
         base["effective"] = (
@@ -3983,7 +3983,7 @@ def http_security_settings_post():
                 error="nftables_unavailable",
                 message=(
                     "Host-firewall escalation cannot be enabled because nftables "
-                    "is unavailable to the WG Panel service. Application-level "
+                    "is unavailable to the WireGuard Dashboard service. Application-level "
                     "blocking is still active."
                 ),
                 firewall=firewall_status,
@@ -7989,7 +7989,7 @@ def _send_zip_telegram(
         created_at = _tg_now_text()
 
         caption = "\n".join([
-            "<b>WG Panel backup</b>",
+            "<b>WireGuard Dashboard backup</b>",
             "",
             "<b>Status</b> · Completed",
             (
@@ -13392,8 +13392,8 @@ def _panel_base() -> str:
     """
     Return canonical base URL ending with '/', using panel_settings https_port when TLS is enabled.
     Examples:
-      https://panel.azumi.com/
-      https://panel.azumi.com:8443/
+      https://panel.example.com/
+      https://panel.example.com:8443/
       http://203.10.113.20:8080/
     """
     s = _load_panel_settings() or {}
@@ -19201,7 +19201,7 @@ def register_twofa_begin():
 
     payload = request.get_json(silent=True) or {}
     account = (payload.get("username") or "admin").strip() or "admin"
-    issuer  = "WG Panel"
+    issuer  = "WireGuard Dashboard"
 
     secret = session.get("reg_totp_secret") or pyotp.random_base32()
     session["reg_totp_secret"] = secret
@@ -19361,8 +19361,8 @@ def twofa_begin():
     secret = pyotp.random_base32()
     session['twofa_pending_secret'] = secret
     session.modified = True
-    label = f"WG-Panel:{username}"
-    issuer = "WG-Panel"
+    label = f"WireGuard-Dashboard:{username}"
+    issuer = "WireGuard-Dashboard"
     otp_uri = pyotp.totp.TOTP(secret).provisioning_uri(name=label, issuer_name=issuer)
     return jsonify(secret=secret, otp_uri=otp_uri), 200
 
@@ -30508,7 +30508,7 @@ def _lookup_geo(host: str) -> dict:
     if old and (now - int(old.get('ts') or 0) < GEO_CACHE_TTL):
         return old
 
-    headers = {'User-Agent': 'WG-Panel/1.0 (+subscription geo)'}
+    headers = {'User-Agent': 'WireGuard-Dashboard/1.0 (+subscription geo)'}
     providers = [
         ('ipwho', f'https://ipwho.is/{host}'),
         ('ipapi', f'https://ipapi.co/{host}/json/'),

@@ -96,7 +96,7 @@ def _enrich_guidance(items, host, *, remote=False, root_path=None, instance_path
                 steps = [
                     _manual_step("Check the service PATH", "The package may already be installed but hidden from the service environment.", ["printf '%s\\n' \"$PATH\"", f"command -v {binary} || true", f"systemctl show {service} -p Environment -p EnvironmentFiles --no-pager"]),
                 ]
-            verification = {"text": f"WG Panel should be able to resolve {binary} in PATH.", "commands": [f"command -v {binary}"]}
+            verification = {"text": f"WireGuard Dashboard should be able to resolve {binary} in PATH.", "commands": [f"command -v {binary}"]}
 
         elif key == "panel_service":
             severity = "medium" if status == "review" else "high"
@@ -176,7 +176,7 @@ def _enrich_guidance(items, host, *, remote=False, root_path=None, instance_path
 
         elif key == "http_protection":
             severity = "low" if status == "review" else "high"
-            cause = "WG Panel HTTP protection is disabled or could not be confirmed. This may be intentional on a private deployment."
+            cause = "WireGuard Dashboard HTTP protection is disabled or could not be confirmed. This may be intentional on a private deployment."
             actions = [action("Open Settings › Security › HTTP protection", "/settings?tab=security&focus=sec-enabled&from=operations", "fa-shield-halved", "Open the HTTP protection switch and policy controls")]
             steps = [
                 _manual_step("Open Security settings", "Start in Monitor mode so real traffic is observed before any blocking is enabled."),
@@ -311,7 +311,7 @@ def _enrich_guidance(items, host, *, remote=False, root_path=None, instance_path
         elif key == "ufw_state":
             severity = "low" if status == "review" else "medium"
             cause = "UFW is active on this host. An active firewall is not a problem by itself, but its rules must allow the panel and intended WireGuard traffic."
-            actions = [action("Open Settings › Security › Advanced firewall", "/settings?tab=security&open=http-security-advanced&focus=hs-firewall-enabled&from=operations", "fa-shield-halved", "Review WG Panel firewall integration without replacing host policy")]
+            actions = [action("Open Settings › Security › Advanced firewall", "/settings?tab=security&open=http-security-advanced&focus=hs-firewall-enabled&from=operations", "fa-shield-halved", "Review WireGuard Dashboard firewall integration without replacing host policy")]
             steps = [
                 _manual_step("Review UFW state", "Do not disable the firewall just to clear this advisory.", ["ufw status verbose", "ufw status numbered"]),
                 _manual_step("Confirm required listeners", "Compare active WireGuard/panel listeners with the rules you intentionally allow.", ["ss -lntup", "wg show"]),
@@ -539,7 +539,7 @@ def collect(app, context):
             repair,
             category="packages",
             commands=commands,
-            impact=("Required by WG Panel for this feature." if name != "systemctl" else "A custom container/supervisor may legitimately not provide systemctl."),
+            impact=("Required by WireGuard Dashboard for this feature." if name != "systemctl" else "A custom container/supervisor may legitimately not provide systemctl."),
         )
 
     def service():

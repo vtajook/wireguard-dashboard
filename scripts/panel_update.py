@@ -79,7 +79,7 @@ def github_main_metadata(repo: str) -> dict:
     if not revision:
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "WG-Panel-Updater",
+            "User-Agent": "WireGuard-Dashboard-Updater",
             "Cache-Control": "no-cache",
         }
         token = (
@@ -130,7 +130,7 @@ def download_repo(repo: str, target: str, dest: Path) -> dict:
                 request = Request(
                     url,
                     headers={
-                        "User-Agent": "WG-Panel-Updater",
+                        "User-Agent": "WireGuard-Dashboard-Updater",
                         "Accept": "application/octet-stream",
                         "Cache-Control": "no-cache",
                     },

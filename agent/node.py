@@ -1478,7 +1478,7 @@ def _github_json(url: str, timeout: int = 20):
         url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "WG-Panel-Installer",
+            "User-Agent": "WireGuard-Dashboard-Installer",
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
@@ -1586,7 +1586,7 @@ def _download_release_zip(url: str, out: Path) -> None:
         url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "WG-Panel-Installer",
+            "User-Agent": "WireGuard-Dashboard-Installer",
         },
     )
     with urllib.request.urlopen(req, timeout=120) as resp, out.open("wb") as fh:

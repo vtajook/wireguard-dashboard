@@ -110,7 +110,7 @@
       }).format(date);
     } catch (error) {
       console.warn(
-        "WG Panel timezone formatting failed; falling back to UTC.",
+        "WireGuard Dashboard timezone formatting failed; falling back to UTC.",
         timezone,
         error,
       );

@@ -11,7 +11,7 @@ html[data-design=modern] .auth-card::before{display:none!important}
 .auth-page-header{position:relative;z-index:2;width:100%;display:flex;justify-content:space-between;align-items:center;gap:20px;padding:26px 48px;border-bottom:1px solid var(--auth-line);box-sizing:border-box}
 .auth-page-header :is(.brand,.brand-badge){display:flex!important;align-items:center;gap:10px;margin:0!important;color:var(--auth-ink);font-size:19px;font-weight:750;white-space:nowrap}
 html[data-design=modern] .auth-page-header .auth-modern-mark{display:block!important;width:32px!important;height:32px!important;filter:none!important;border:0!important;box-shadow:none!important;border-radius:0!important}
-.auth-page-header .brand-badge::after{content:'WG Panel'}
+.auth-page-header .brand-badge::after{content:'WireGuard Dashboard'}
 .auth-appearance-controls{display:flex;align-items:center;gap:18px}.auth-appearance-controls>div{display:flex;gap:3px;padding:3px;border:1px solid var(--auth-line);border-radius:9px;background:var(--auth-soft)}
 .auth-appearance-controls button{min-width:36px;min-height:36px;padding:8px 10px;font:600 11px/1 system-ui;cursor:pointer;border:0;border-radius:6px;background:transparent;color:var(--auth-muted)}
 .auth-appearance-controls button[aria-pressed=true]{background:#8566e91a;color:var(--auth-accent)}

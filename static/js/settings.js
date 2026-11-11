@@ -1930,14 +1930,14 @@ document.getElementById('rt-restart')
 
       host.className = 'sec-firewall-status ' + (usable ? 'is-good' : 'is-warn');
       if (usable) {
-        host.innerHTML = '<i class="fa-solid fa-circle-check"></i><span>nftables ready · WG Panel can manage its dedicated temporary-block table</span>';
+        host.innerHTML = '<i class="fa-solid fa-circle-check"></i><span>nftables ready · WireGuard Dashboard can manage its dedicated temporary-block table</span>';
         if (remedy) remedy.hidden = true;
         if (toggle) { toggle.disabled = false; toggle.removeAttribute('aria-disabled'); }
       } else {
         const reason = String(status.reason || (available ? 'permission_denied' : 'not_installed'));
         const detail = String(status.detail || '').trim();
         host.innerHTML = available
-          ? '<i class="fa-solid fa-triangle-exclamation"></i><span>nftables is installed but WG Panel cannot manage firewall rules · application blocking still works</span>'
+          ? '<i class="fa-solid fa-triangle-exclamation"></i><span>nftables is installed but WireGuard Dashboard cannot manage firewall rules · application blocking still works</span>'
           : '<i class="fa-solid fa-triangle-exclamation"></i><span>nftables is not installed · application blocking still works</span>';
 
         if (toggle) {
@@ -1948,8 +1948,8 @@ document.getElementById('rt-restart')
         if (remedy) remedy.hidden = false;
         if (remedyTitle) remedyTitle.textContent = available ? 'Firewall permission is unavailable' : 'Install nftables to enable host-firewall escalation';
         if (remedyText) remedyText.textContent = available
-          ? (detail || 'Keep host-firewall escalation off unless the WG Panel service has permission to manage nftables. Application quarantine remains active.')
-          : 'WG Panel will not install packages automatically. Install nftables manually, then click Recheck.';
+          ? (detail || 'Keep host-firewall escalation off unless the WireGuard Dashboard service has permission to manage nftables. Application quarantine remains active.')
+          : 'WireGuard Dashboard will not install packages automatically. Install nftables manually, then click Recheck.';
         const command = String(status.install_command || status.check_command || (available ? 'sudo nft list ruleset' : 'sudo apt-get update && sudo apt-get install -y nftables'));
         if (remedyCommand) remedyCommand.textContent = command;
       }

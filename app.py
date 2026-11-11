@@ -10538,6 +10538,15 @@ def _wg_dump_invalidate():
     _WG_DUMP_CACHE['ts'] = 0.0
 
 
+def _wg_dump_forget(dev, public_key):
+    """A peer was removed from the kernel: drop it from the cached dump
+    instead of throwing the whole cache away (mass expiry used to re-run
+    `wg show all dump` once per blocked peer)."""
+    data = _WG_DUMP_CACHE.get('data')
+    if data and dev in data:
+        data[dev].pop(public_key, None)
+
+
 def _wg_dump_all(max_age=None):
     """Return {dev: {public_key: (latest_handshake, rx, tx)}} for every local
     WireGuard interface using ONE subprocess, cached for a couple of seconds.
@@ -10957,7 +10966,9 @@ def _wg_disable(peer):
 
     # When the interface is down there is no runtime peer to remove; the
     # config-file removal below is what keeps it disabled when it comes up.
-    if _iface_up(dev):
+    _cached = _WG_DUMP_CACHE.get('data')
+    _is_up = (dev in _cached) if (_cached and (time.monotonic() - _WG_DUMP_CACHE.get('ts', 0)) < _WG_DUMP_TTL) else _iface_up(dev)
+    if _is_up:
         result = subprocess.run(
             [
                 'wg',
@@ -10986,7 +10997,7 @@ def _wg_disable(peer):
             )
 
     _blackhole(host_cidr)
-    _wg_dump_invalidate()
+    _wg_dump_forget(dev, peer.public_key)
 
     # A disabled/blocked peer must not live in the .conf file, otherwise any
     # interface restart (wg-quick up / reboot) silently re-enables it.
@@ -11475,6 +11486,12 @@ def api_shortlink_by_public_key(public_key):
     public_key = (public_key or '').strip()
     if not public_key:
         abort(404)
+
+    # Werkzeug routes /api/peer/<digits>/shortlink here (the <path:> rule wins
+    # over <int:pid>), so a numeric value is a peer id, never a WireGuard key.
+    if public_key.isdigit():
+        peer = db.session.get(Peer, int(public_key)) or abort(404)
+        return _shortlink_response_for_peer(peer)
 
     peer = Peer.query.filter_by(public_key=public_key).first()
     if not peer:
@@ -12875,6 +12892,20 @@ def _conv_time_limit(payload):
         return None
 
 def _peer_in_conf(conf_path, public_key):
+    # Fast path: a key that does not occur anywhere in the file is not there
+    # (this used to be a slow line-by-line Python scan on every call).
+    try:
+        with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+            text_body = f.read()
+    except Exception:
+        return False
+    key = (public_key or '').strip()
+    if not key or key not in text_body:
+        return False
+    return re.search(r'(?mi)^\s*publickey\s*=\s*' + re.escape(key) + r'\s*$', text_body) is not None
+
+
+def _peer_in_conf_slow(conf_path, public_key):
     try:
         with open(conf_path, 'r') as f:
             lines = f.readlines()
@@ -12933,10 +12964,56 @@ def _write_conf_atomic(conf_path: str, text_body: str):
                 pass
 
 
+_CONF_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def _conf_file_lock(conf_path):
+    """Cross-process lock for read-modify-write of a WireGuard .conf file.
+    Gunicorn workers (create/edit/delete) and the enforcer (block/unblock)
+    used to rewrite the same file concurrently and could lose each other's
+    changes. Re-entrant within a thread."""
+    key = os.path.realpath(str(conf_path or ''))
+    depth = getattr(_CONF_LOCK_STATE, 'depth', None)
+    if depth is None:
+        depth = _CONF_LOCK_STATE.depth = {}
+    if depth.get(key):
+        depth[key] += 1
+        try:
+            yield
+        finally:
+            depth[key] -= 1
+        return
+    handle = None
+    try:
+        os.makedirs(_ALLOC_LOCK_DIR, exist_ok=True)
+        name = re.sub(r'[^A-Za-z0-9_.-]+', '_', key.strip('/')) or 'conf'
+        handle = open(os.path.join(_ALLOC_LOCK_DIR, f'{name}.conf.lock'), 'w')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except Exception:
+        handle = None
+    depth[key] = 1
+    try:
+        yield
+    finally:
+        depth[key] = 0
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            handle.close()
+
+
 def _peer_to_conf(peer: Peer):
     conf_path = getattr(peer.iface, 'path', None)
     if not conf_path:
         raise RuntimeError('The interface has no configuration file path.')
+    with _conf_file_lock(conf_path):
+        return _peer_to_conf_locked(peer, conf_path)
+
+
+def _peer_to_conf_locked(peer: Peer, conf_path):
 
     if _peer_in_conf(conf_path, peer.public_key):
         return
@@ -12974,9 +13051,39 @@ def _remove_peer(peer: Peer):
     conf_path = getattr(peer.iface, 'path', None)
     if not conf_path:
         return
+    with _conf_file_lock(conf_path):
+        return _remove_peer_locked(peer, conf_path)
+
+
+def _remove_peer_locked(peer: Peer, conf_path):
     if not os.path.isfile(conf_path):
         return
 
+    with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+        text_body = f.read()
+
+    key = (peer.public_key or '').strip()
+    if not key or key not in text_body:
+        return   # nothing to remove: no rewrite needed
+    text_body = text_body.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Split into sections at lines that start with '[' (section headers) and
+    # drop only the [Peer] section that carries this key. Fast for big files.
+    key_re = re.compile(r'(?mi)^\s*publickey\s*=\s*' + re.escape(key) + r'\s*$')
+    sections = re.split(r'(?m)^(?=[ \t]*\[[A-Za-z]+\][ \t]*$)', text_body)
+    kept = []
+    for sec in sections:
+        head = sec.lstrip().split('\n', 1)[0].strip().lower()
+        if head == '[peer]' and key in sec and key_re.search(sec):
+            continue
+        kept.append(sec)
+    _write_conf_atomic(conf_path, _norm_conftext(''.join(kept)))
+
+    if _peer_in_conf(conf_path, peer.public_key):
+        raise RuntimeError(f'Peer block is still present in {conf_path}.')
+
+
+def _remove_peer_locked_slow(peer: Peer, conf_path):
     with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
         lines = f.readlines()
 
@@ -13056,6 +13163,11 @@ def _remove_peers_from_conf(conf_path: str, public_keys) -> int:
     keys = {k for k in (public_keys or []) if k}
     if not conf_path or not keys or not os.path.isfile(conf_path):
         return 0
+    with _conf_file_lock(conf_path):
+        return _remove_peers_from_conf_locked(conf_path, keys)
+
+
+def _remove_peers_from_conf_locked(conf_path, keys):
     with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
         original = f.read()
     head, blocks = _split_conf_sections(original)
@@ -13086,6 +13198,7 @@ def _reconcile_local_iface(iface, peers=None):
     db_keys = {p.public_key for p in peers if p.public_key}
 
     if conf_path and os.path.isfile(conf_path):
+      with _conf_file_lock(conf_path):
         with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
             original = f.read()
         head, blocks = _split_conf_sections(original)
@@ -14861,6 +14974,8 @@ def _reenable_blocked_peer(peer, note='Renewed: limits allow access again') -> b
         _enforce_warn(peer, 'unblock')
         return False
     peer.status = 'online'
+    # The peer was just (re)added to the kernel: its counter starts from 0.
+    peer.bytes_offset = 0
     log_event(peer, 'unblocked', note, commit=False)
     return True
 
@@ -15060,7 +15175,7 @@ def _expire():
         if (
             expiry_ts
             and now >= expiry_ts
-            and peer.status != 'blocked'
+            and peer.status not in ('blocked', 'offline')
         ):
             disabled = _disable_peer(
                 peer,
@@ -15155,7 +15270,7 @@ def _expire():
 
         if (
             limit_bytes is not None
-            and peer.status != 'blocked'
+            and peer.status not in ('blocked', 'offline')
             and used_effective >= limit_bytes
         ):
             if not is_node:
@@ -20314,6 +20429,33 @@ def stats_mini():
 # --------------
 # Peers list[TG]
 # ______________
+def _normalize_data_limit(value, unit=None):
+    """(value, unit) -> (int value, 'Mi'|'Gi').
+
+    The DB column is an integer, so a fractional amount such as 0.5 GB used
+    to be truncated to 0, which made the peer UNLIMITED (and 10.5 GB -> 10).
+    Fractional GiB values are stored in MiB instead. Accepts GB/G/GiB/Gi,
+    MB/M/MiB/Mi and TB/T/TiB/Ti in any case."""
+    u = str(unit or 'Mi').strip().lower()
+    if u in ('', 'mi', 'mb', 'm', 'mib'):
+        base = 'Mi'
+    elif u in ('ti', 'tb', 't', 'tib'):
+        base = 'Ti'
+    else:
+        base = 'Gi'
+    try:
+        v = float(str(value).strip()) if value is not None and str(value).strip() != '' else 0.0
+    except (TypeError, ValueError):
+        raise ValueError('Traffic limit must be numeric.')
+    if v != v or v < 0:
+        raise ValueError('Traffic limit must be a positive number.')
+    if base == 'Ti':
+        v, base = v * 1024, 'Gi'
+    if base == 'Gi' and abs(v - round(v)) > 1e-9:
+        return int(round(v * 1024)), 'Mi'
+    return int(round(v)), base
+
+
 @app.route('/api/peers', methods=['POST'])
 @require_api_key_or_login
 def peers_create():
@@ -20376,15 +20518,13 @@ def peers_create():
         combined_days = _conv_time_limit(data)
         created_ts = now_ts()
 
-        data_limit_value = _as_int(
-            data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
-            0
-        )
-        data_limit_unit = (
-            data.get('data_limit_unit') or
-            data.get('limit_unit') or
-            'Mi'
-        )
+        try:
+            data_limit_value, data_limit_unit = _normalize_data_limit(
+                data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
+                data.get('data_limit_unit') or data.get('limit_unit') or 'Mi',
+            )
+        except ValueError as exc:
+            return jsonify(success=False, ok=False, error='invalid_data_limit', detail=str(exc)), 400
 
         start_on_first_use = _as_bool(data.get('start_on_first_use'))
         unlimited = _as_bool(data.get('unlimited'))
@@ -20648,15 +20788,13 @@ def peers_create():
     mtu = _clean_mtu(data.get('mtu'))
     dns = (data.get('dns') or '').strip() or None
 
-    data_limit_value = _as_int(
-        data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
-        0
-    )
-    data_limit_unit = (
-        data.get('data_limit_unit') or
-        data.get('limit_unit') or
-        'Mi'
-    )
+    try:
+        data_limit_value, data_limit_unit = _normalize_data_limit(
+            data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
+            data.get('data_limit_unit') or data.get('limit_unit') or 'Mi',
+        )
+    except ValueError as exc:
+        return jsonify(success=False, ok=False, error='invalid_data_limit', detail=str(exc)), 400
 
     peer = Peer(
         iface_id=iface.id,
@@ -21338,11 +21476,12 @@ def panel_peers_bulk():
         dns = (data.get('dns') or '').strip() or None
 
         try:
-            dlim_val = int(data.get('data_limit_value') or data.get('data_limit') or 0)
-        except Exception:
-            dlim_val = 0
-
-        dlim_unit = data.get('data_limit_unit') or data.get('limit_unit') or 'Mi'
+            dlim_val, dlim_unit = _normalize_data_limit(
+                data.get('data_limit_value') or data.get('data_limit') or 0,
+                data.get('data_limit_unit') or data.get('limit_unit') or 'Mi',
+            )
+        except ValueError:
+            dlim_val, dlim_unit = 0, 'Mi'
 
         start_on_first_use = bool(data.get('start_on_first_use') or False)
         unlimited = bool(data.get('unlimited') or False)
@@ -21723,8 +21862,13 @@ def panel_peers_bulk():
     keepalive = data.get('persistent_keepalive')
     mtu = data.get('mtu')
     dns = data.get('dns')
-    dlim_val = data.get('data_limit_value') or 0
-    dlim_unit = data.get('data_limit_unit')
+    try:
+        dlim_val, dlim_unit = _normalize_data_limit(
+            data.get('data_limit_value') or 0,
+            data.get('data_limit_unit') or data.get('limit_unit') or 'Mi',
+        )
+    except ValueError:
+        dlim_val, dlim_unit = 0, 'Mi'
     start_on_first_use = bool(data.get('start_on_first_use') or False)
     unlimited = bool(data.get('unlimited') or False)
 
@@ -23351,6 +23495,28 @@ def api_enable(pid):
 
         live_total = max(0, live_total)
 
+        _body = request.get_json(silent=True) or {}
+        _reset_arg = _body.get('reset', request.args.get('reset', True)) if isinstance(_body, dict) else True
+        do_reset = str(_reset_arg).strip().lower() not in ('0', 'false', 'no', 'off')
+
+        if not do_reset:
+            # Re-enable only: keep used traffic, first use and expiry as they are.
+            p.bytes_offset = live_total
+            p.status = 'online'
+            db.session.commit()
+            _wg_dump_invalidate()
+            try:
+                log_event(p, 'enabled', f'Peer enabled (no reset); offset={live_total}')
+                logpanel_action('peer_enable', f'pid={p.id}; iface={dev}; reset=0')
+            except Exception:
+                pass
+            return jsonify(
+                success=True, ok=True, status='online', interface=dev,
+                host_cidr=host_cidr, timer_reset=False, data_reset=False,
+                used_bytes_total=int(p.used_bytes_total or 0),
+                message='Peer enabled. Usage and expiry were kept.',
+            )
+
         p.bytes_offset = live_total
         p.used_bytes_total = 0
         p.first_used_at = None
@@ -23861,12 +24027,15 @@ def api_edit(pid):
         )
 
         try:
-            data[
-                'data_limit_value'
-            ] = (
-                int(float(raw))
-                if str(raw or '').strip()
-                else 0
+            (
+                data['data_limit_value'],
+                data['data_limit_unit'],
+            ) = _normalize_data_limit(
+                raw,
+                data.get('data_limit_unit')
+                or data.get('limit_unit')
+                or p.data_limit_unit
+                or 'Mi',
             )
 
         except Exception:

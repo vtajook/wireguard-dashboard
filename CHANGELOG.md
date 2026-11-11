@@ -3,6 +3,25 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-11 — enforcement & stability audit
+
+Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
+
+- **Fractional data limits**: 0.5 GB was stored as 0 and the peer became
+  *unlimited*; 10.5 GB became 10. Fractional GiB are now stored in MiB
+  (create, bulk create and edit).
+- **Admin-disabled peers** (`offline`) are no longer converted to `blocked`
+  by the enforcer, so renewing them does not silently re-enable them.
+- `POST /api/peer/<id>/enable` accepts `{"reset": false}` to re-enable
+  without resetting used traffic and expiry (the panel UI keeps the old reset).
+- `/api/peer/<id>/shortlink` always returned 404 (shadowed by the
+  public-key route); fixed.
+- Cross-process lock around every `.conf` rewrite: workers and the enforcer
+  could overwrite each other's changes.
+- Mass expiry is much faster: conf edits no longer scan the whole file in
+  Python per peer, and the `wg show all dump` cache is kept when peers are removed.
+- Re-enabled peers restart their traffic offset at 0.
+
 ## 2026-11 — first release
 
 - Renamed to **WireGuard Dashboard**.

@@ -15069,8 +15069,14 @@ def _reenable_blocked_peer(peer, note='Renewed: limits allow access again') -> b
         _enforce_warn(peer, 'unblock')
         return False
     peer.status = 'online'
-    # The peer was just (re)added to the kernel: its counter starts from 0.
-    peer.bytes_offset = 0
+    # Normally the peer was just (re)added and its counter is 0. If it never
+    # left the kernel (an earlier removal failed), its counter is still big
+    # and offset=0 would count the whole counter again: use the real value.
+    try:
+        _wg_dump_invalidate()
+        peer.bytes_offset = max(0, int(_wg_transfer(peer) or 0))
+    except Exception:
+        peer.bytes_offset = 0
     log_event(peer, 'unblocked', note, commit=False)
     return True
 
@@ -23648,6 +23654,7 @@ def api_enable(pid):
         _sync_peer(p)
 
         try:
+            _wg_dump_invalidate()
             live_total = int(_wg_transfer(p) or 0)
         except Exception:
             current_app.logger.warning(
@@ -23809,6 +23816,7 @@ def reset_data(pid):
     p = db.session.get(Peer, pid) or abort(404)
 
     try:
+        _wg_dump_invalidate()   # fresh counter, not a 2s old snapshot
         current = int(_wg_transfer(p) or 0)
     except Exception:
         current = 0

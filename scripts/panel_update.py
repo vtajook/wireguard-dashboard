@@ -238,6 +238,21 @@ def backup_code(root: Path, backup_path: Path):
             if item.name in EXCLUDES:
                 continue
             tar.add(item, arcname=item.name, recursive=True)
+    prune_backups(backup_path.parent, keep=10)
+
+
+def prune_backups(folder: Path, keep: int = 10):
+    """Keep only the newest <keep> update backups (they were never deleted)."""
+    try:
+        items = sorted(
+            (p for p in folder.glob("*.tar.gz") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in items[keep:]:
+            old.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 def copy_tree(src: Path, dst: Path):
     for item in src.iterdir():

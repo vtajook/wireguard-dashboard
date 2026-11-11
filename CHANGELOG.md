@@ -67,4 +67,5 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Renewal of a peer that never really left the kernel no longer counts its whole counter again; reset-usage and enable read a fresh counter instead of a 2s old snapshot.
 - **Renewals fixed**: an expired customer renewed with the same plan length stayed blocked ("no change"); first-use services were renewed from their first connection instead of from now (10 days left + 30 bought = 20). Edit API accepts "renew": true; the bot sends it.
 - First use after a timer reset waits for a new connection (an old handshake from days ago used to start the timer immediately and the customer lost those days).
+- Update Center keeps only the newest 10 code backups (they were never deleted).
 - Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.

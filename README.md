@@ -1,0 +1,2 @@
+# wireguard-dashboard
+wireguard panel

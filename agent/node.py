@@ -222,7 +222,7 @@ AGENT_DIR = Path(__file__).resolve().parent
 ROOT_MARKER = Path.home() / ".wg_node_root.json"
 
 DEFAULT_CLONE_DIR = Path("/usr/local/bin/wg_panel")
-DEFAULT_GIT_URL = "https://github.com/Azumi67/WG_Panel.git"
+DEFAULT_GIT_URL = "https://github.com/vtajook/wireguard-dashboard.git"
 
 def _write(p: Path, text: str):
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -1454,7 +1454,7 @@ def uninstall_all(root: Path):
     pause()
 
 
-RELEASES_API = "https://api.github.com/repos/Azumi67/WG_Panel/releases"
+RELEASES_API = "https://api.github.com/repos/vtajook/wireguard-dashboard/releases"
 RELEASE_BACKUP_PREFIX = "release-rollback-"
 
 RELEASE_PRESERVE_TOP = {

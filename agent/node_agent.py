@@ -3049,7 +3049,7 @@ def _node_version() -> str:
     return "0.0.0"
 
 
-NODE_REPO = "Azumi67/WG_Panel"
+NODE_REPO = "vtajook/wireguard-dashboard"
 
 def _node_root():
     configured = (os.getenv("WG_PANEL_ROOT") or "").strip()

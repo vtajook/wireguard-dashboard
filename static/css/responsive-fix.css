@@ -1,0 +1,94 @@
+/* =====================================================================
+   responsive-fix.css — loaded last.
+   Fixes clipped/overflowing layouts between the phone breakpoint and wide
+   desktop (tablets and "Desktop site" mode on phones, ~920–1350px), where
+   the desktop grid did not fit next to the sidebar.
+   ===================================================================== */
+
+/* ---- global guards ---- */
+html, body { max-width: 100%; }
+#main-content, .main { min-width: 0; }
+img, video, canvas { max-width: 100%; }
+
+/* ---- selection checkbox on peer cards (never takes a grid cell) ---- */
+.peer-card { position: relative; }
+.peer-card .wgp-select {
+  position: absolute !important;
+  top: 8px; left: 8px;
+  z-index: 3;
+  width: 22px; height: 22px; min-width: 0 !important;
+  margin: 0 !important;
+  border-radius: 7px;
+  background: var(--ws-panel, rgba(255,255,255,.92));
+  box-shadow: 0 0 0 1px rgba(127,127,127,.28);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.peer-card .wgp-select input { width: 15px; height: 15px; margin: 0; }
+.wgp-bulkbar { box-sizing: border-box; max-width: 100%; }
+
+/* ---- containers we query ---- */
+.peers-container { container-type: inline-size; container-name: wgpeers; }
+.peer-context-workspace { container-type: inline-size; container-name: wgctx; }
+
+@media (min-width: 921px) {
+  /* Peer cards: 2 columns instead of a fixed 913px grid that got clipped */
+  @container wgpeers (max-width: 1000px) {
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap {
+      height: auto !important; min-height: 0 !important;
+      min-width: 0 !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px !important;
+      grid-auto-rows: auto !important;
+      row-gap: 12px !important;
+      column-gap: 12px !important;
+      padding-left: 38px !important;
+    }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-identity-block { grid-column: 1 !important; grid-row: 1 !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-live-block     { grid-column: 2 !important; grid-row: 1 !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-info-wrap      { grid-column: 3 !important; grid-row: 1 !important; justify-self: end !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-usage-block    { grid-column: 1 !important; grid-row: 2 !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-network-block  { grid-column: 2 / span 2 !important; grid-row: 2 !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > :is(.peer-identity-block, .peer-live-block, .peer-usage-block, .peer-network-block) {
+      width: 100% !important; max-width: 100% !important; min-width: 0 !important;
+      box-sizing: border-box !important; justify-self: stretch !important;
+    }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap .peer-traffic {
+      width: 100% !important; grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap .peer-traffic > * { min-width: 0 !important; width: auto !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap > .peer-usage-block {
+      grid-template-columns: minmax(0, 1fr) auto !important;
+    }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap .peer-usage-meter {
+      width: 100% !important; grid-template-columns: auto minmax(0, 1fr) auto !important; grid-column: 1 / -1 !important;
+    }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap .peer-usage-meter-track { min-width: 0 !important; width: auto !important; }
+    html body.peers-page .peers-container .peer-card .peer-main.peer-main-nowrap .peer-data { max-width: none !important; }
+    .peer-card .peer-actions-row { flex-wrap: wrap !important; }
+  }
+
+  /* Server / interface toolbar: wrap instead of overlapping */
+  @container wgctx (max-width: 1100px) {
+    .peer-context-toolbar { flex-wrap: wrap !important; row-gap: 10px !important; }
+    .peer-context-toolbar > .peer-context-separator { display: none !important; }
+    .peer-context-toolbar > .peer-context-server { flex: 1 1 100% !important; max-width: 100% !important; }
+    .peer-context-toolbar > .peer-context-interface {
+      flex: 1 1 100% !important; max-width: 100% !important;
+      flex-wrap: wrap !important; gap: 8px !important; min-width: 0 !important;
+    }
+    .peer-context-interface > .iface-bar { flex: 1 1 240px !important; min-width: 200px !important; width: auto !important; }
+    .peer-context-interface > .iface-active-row { flex: 1 1 auto !important; flex-wrap: wrap !important; gap: 6px !important; justify-content: flex-end; }
+  }
+}
+
+/* operations page: 430px + 620px columns overflowed next to the sidebar */
+body.operations-page .ops2-shell { container-type: inline-size; container-name: wgops; }
+body.operations-page .ops2-shell > * { min-width: 0; }
+body.operations-page .ops2-resolution { max-width: 100%; box-sizing: border-box; }
+@container wgops (max-width: 1080px) {
+  body.operations-page .ops2-workspace { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+/* create-peer button label was clipped next to its badge */
+#create-peer-btn { min-width: max-content; }

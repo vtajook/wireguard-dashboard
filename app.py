@@ -97,7 +97,8 @@ def _project_version() -> str:
 
 
 PANEL_VERSION = _project_version()
-PANEL_REPO = "Azumi67/WG_Panel"
+# Updates come from this GitHub repo (fork of Azumi67/WG_Panel). Override with WG_PANEL_REPO.
+PANEL_REPO = (os.getenv("WG_PANEL_REPO") or "vtajook/wireguard-dashboard").strip()
 PANEL_UPDATE_TTL = 1800
 _PANEL_UPDATE_CACHE = {
     "ts": 0,
@@ -376,6 +377,126 @@ app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
 db.init_app(app)
 
+_STATIC_VERSION_CACHE = {}
+
+
+@app.url_defaults
+def _static_version_defaults(endpoint, values):
+    """Append ?v=<mtime> to static URLs so browsers can cache them for a
+    year and still pick up new files immediately after an update."""
+    if endpoint != 'static' or 'v' in values:
+        return
+    filename = values.get('filename')
+    if not filename:
+        return
+    now = time.monotonic()
+    hit = _STATIC_VERSION_CACHE.get(filename)
+    if hit and now - hit[1] < 30:
+        if hit[0]:
+            values['v'] = hit[0]
+        return
+    try:
+        ver = str(int(os.stat(os.path.join(app.static_folder, filename)).st_mtime))
+    except OSError:
+        ver = ''
+    _STATIC_VERSION_CACHE[filename] = (ver, now)
+    if ver:
+        values['v'] = ver
+
+# ---------------------------------------------------------------
+# SQLite tuning: WAL + busy timeout so concurrent workers do not
+# fail with "database is locked" (root cause of flaky API calls).
+# Set WG_SQLITE_WAL=0 to keep the legacy rollback journal.
+# ---------------------------------------------------------------
+import sqlite3 as _wgp_sqlite3
+from sqlalchemy.engine import Engine as _WgpSAEngine
+
+
+@event.listens_for(_WgpSAEngine, "connect")
+def _wgp_sqlite_pragmas(dbapi_conn, _record):
+    if not isinstance(dbapi_conn, _wgp_sqlite3.Connection):
+        return
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA busy_timeout=30000")
+        if os.getenv("WG_SQLITE_WAL", "1") != "0":
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
+def _sqlite_snapshot(src_path: str, dest_path: str) -> str:
+    """Consistent copy of a (possibly WAL-mode) SQLite DB via the backup API."""
+    dest_dir = os.path.dirname(dest_path) or '.'
+    os.makedirs(dest_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='.dbsnap.', dir=dest_dir)
+    os.close(fd)
+    try:
+        src = _wgp_sqlite3.connect(src_path, timeout=30)
+        try:
+            dst = _wgp_sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+                try:
+                    dst.execute("PRAGMA journal_mode=DELETE")
+                except Exception:
+                    pass
+            finally:
+                dst.close()
+        finally:
+            src.close()
+        os.replace(tmp, dest_path)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return dest_path
+
+
+def _sqlite_checkpoint(db_file: str):
+    try:
+        c = _wgp_sqlite3.connect(db_file, timeout=30)
+        try:
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            c.close()
+    except Exception:
+        pass
+
+
+def _wgp_after_fork_child():
+    """Runs in every forked gunicorn worker: drop pooled DB connections and
+    locks inherited from the master (the master keeps running the enforcer)."""
+    global _WG_DUMP_LOCK, _PANEL_SETTINGS_CACHE_LOCK
+    try:
+        _WG_DUMP_LOCK = threading.Lock()
+        _PANEL_SETTINGS_CACHE_LOCK = threading.Lock()
+    except Exception:
+        pass
+    try:
+        with app.app_context():
+            try:
+                db.engine.dispose(close=False)
+            except TypeError:
+                db.engine.dispose()
+    except Exception:
+        pass
+
+
+try:
+    os.register_at_fork(after_in_child=_wgp_after_fork_child)
+except Exception:
+    pass
+
 register_profile_routes(app)
 
 def _effective_dns(peer):
@@ -484,6 +605,8 @@ def _dev_cookie():
 
 @app.after_request
 def _log_request(resp):
+    if (request.path or '').startswith('/static/'):
+        return resp
     try:
         app.logger.info('HTTP %s %s %s', request.method, request.path, resp.status_code)
     except Exception:
@@ -503,8 +626,13 @@ def cache_headers(resp):
         resp.headers['Pragma'] = 'no-cache'
         resp.headers['Expires'] = '0'
         resp.headers['Vary'] = 'Cookie'
-    elif request.path.startswith('/static/') and (request.path.endswith('.css') or request.path.endswith('.js')):
-        resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+    elif request.path.startswith('/static/'):
+        if request.args.get('v'):
+            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        elif request.path.endswith('.css') or request.path.endswith('.js'):
+            resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
+        else:
+            resp.headers['Cache-Control'] = 'public, max-age=86400'
     return resp
 
 #------------------
@@ -512,6 +640,9 @@ def cache_headers(resp):
 #__________________
 @app.after_request
 def inject_sec_headers(resp):
+    if (request.path or '').startswith('/static/'):
+        resp.headers.setdefault('X-Frame-Options', 'DENY')
+        return resp
     secure_now = _is_https()
 
     try:
@@ -3324,6 +3455,8 @@ def _start_http_security_cleanup():
 
 @app.before_request
 def _http_security_enforce_temporary_block():
+    if (request.path or '').startswith('/static/'):
+        return None
     settings = _load_http_security_settings()
     if not settings.get("enabled"):
         return None
@@ -6527,7 +6660,14 @@ def backup_page():
     return render_template('backup.html')
 
 def _db_path():
-    return DB_PATH if os.path.isfile(DB_PATH) else None
+    if not os.path.isfile(DB_PATH):
+        return None
+    try:
+        snap = os.path.join(app.instance_path, 'db_snapshot', os.path.basename(DB_PATH))
+        return _sqlite_snapshot(DB_PATH, snap)
+    except Exception:
+        app.logger.warning('SQLite snapshot failed; using live DB file', exc_info=True)
+        return DB_PATH
 
 def _jsonl_bundle(z: zipfile.ZipFile):
     inst = Path(app.instance_path)
@@ -6777,9 +6917,23 @@ def _backup_restore_impl():
                         db_path = Path(DB_PATH)
                         db_path.parent.mkdir(parents=True, exist_ok=True)
 
+                        _sqlite_checkpoint(str(db_path))
+                        try:
+                            db.session.remove()
+                            db.engine.dispose()
+                        except Exception:
+                            pass
+
                         _backup_existing(db_path, kind_name="db", rel_tail=db_path.name)
 
                         src.replace(db_path)
+                        for _suffix in ("-wal", "-shm"):
+                            try:
+                                os.unlink(str(db_path) + _suffix)
+                            except FileNotFoundError:
+                                pass
+                            except Exception:
+                                app.logger.warning("Could not remove %s%s", db_path, _suffix)
                         restored["db"] = True
 
                     except Exception as e:
@@ -7217,7 +7371,7 @@ def backup_node_agent_install_command():
             api_key = ''
         base_url = getattr(node, 'base_url', '') or ''
 
-    command = """sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/agent/node.sh)"'"""
+    command = """sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/agent/node.sh)"'"""
 
     return jsonify(
         ok=True,
@@ -10372,6 +10526,77 @@ def _copy_local_iface_from_parsed(existing, parsed):
         _assign_iface_public_key(existing, pk)
     return existing
 
+_WG_DUMP_CACHE = {'ts': 0.0, 'data': None}
+_WG_DUMP_LOCK = threading.Lock()
+try:
+    _WG_DUMP_TTL = max(0.5, float(os.getenv('WG_DUMP_TTL_SEC', '2')))
+except Exception:
+    _WG_DUMP_TTL = 2.0
+
+
+def _wg_dump_invalidate():
+    _WG_DUMP_CACHE['ts'] = 0.0
+
+
+def _wg_dump_all(max_age=None):
+    """Return {dev: {public_key: (latest_handshake, rx, tx)}} for every local
+    WireGuard interface using ONE subprocess, cached for a couple of seconds.
+    Returns None when the runtime could not be read (callers must treat that
+    as "unknown", never as zero traffic)."""
+    ttl = _WG_DUMP_TTL if max_age is None else float(max_age)
+    cache = _WG_DUMP_CACHE
+    if cache['data'] is not None and (time.monotonic() - cache['ts']) < ttl:
+        return cache['data']
+    with _WG_DUMP_LOCK:
+        if cache['data'] is not None and (time.monotonic() - cache['ts']) < ttl:
+            return cache['data']
+        try:
+            raw = subprocess.check_output(
+                ['wg', 'show', 'all', 'dump'],
+                stderr=subprocess.DEVNULL,
+                timeout=6.0,
+            ).decode(errors='replace')
+        except Exception:
+            return None
+
+        data = {}
+        for line in raw.splitlines():
+            cols = line.split('\t')
+            if len(cols) == 5:
+                data.setdefault(cols[0], {})
+                continue
+            if len(cols) < 9:
+                continue
+            dev, pub = cols[0], cols[1]
+
+            def _n(v):
+                v = (v or '').strip()
+                return int(v) if v.isdigit() else 0
+
+            data.setdefault(dev, {})[pub] = (_n(cols[5]), _n(cols[6]), _n(cols[7]))
+
+        cache['data'] = data
+        cache['ts'] = time.monotonic()
+        return data
+
+
+def _wg_runtime_entry(peer):
+    iface = getattr(peer, 'iface', None)
+    if iface is None or getattr(iface, 'node_id', None) is not None:
+        return None
+    name = getattr(iface, 'name', '') or ''
+    if ':' in name:
+        return None
+    data = _wg_dump_all()
+    if not data:
+        return None
+    try:
+        dev = iface_devname(iface)
+    except Exception:
+        return None
+    return (data.get(dev) or {}).get(getattr(peer, 'public_key', None))
+
+
 def _wg_transfer(peer):
     rx, tx = _wg_rx_tx(peer)
     return rx + tx
@@ -10381,69 +10606,15 @@ def _wg_runtime_snapshot(iface_names):
     transfers = {}
     handshakes = {}
 
-    names = {
-        str(name or '').strip()
-        for name in iface_names
-        if str(name or '').strip()
-    }
+    data = _wg_dump_all() or {}
 
-    for iface_name in sorted(names):
-        try:
-            dev = iface_name.split(':')[-1]
-
-            lines = subprocess.check_output(
-                ['wg', 'show', dev, 'dump'],
-                stderr=subprocess.DEVNULL,
-                timeout=2.0,
-            ).decode(
-                errors='replace'
-            ).splitlines()
-
-            for line in lines[1:]:
-                columns = line.split('\t')
-
-                if len(columns) < 8:
-                    columns = line.split()
-
-                if len(columns) < 8:
-                    continue
-
-                public_key = columns[0].strip()
-
-                if not public_key:
-                    continue
-
-                try:
-                    latest_handshake = int(columns[4] or 0)
-                except (TypeError, ValueError):
-                    latest_handshake = 0
-
-                try:
-                    rx_bytes = int(columns[5] or 0)
-                    tx_bytes = int(columns[6] or 0)
-                except (TypeError, ValueError):
-                    rx_bytes = 0
-                    tx_bytes = 0
-
-                key = (iface_name, public_key)
-
-                transfers[key] = (rx_bytes, tx_bytes)
-                handshakes[key] = latest_handshake
-
-        except (
-            subprocess.TimeoutExpired,
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            OSError,
-        ):
+    for iface_name in {str(n or '').strip() for n in iface_names if str(n or '').strip()}:
+        dev = iface_name.split(':')[-1]
+        if ':' in iface_name:
             continue
-
-        except Exception:
-            current_app.logger.debug(
-                "WireGuard runtime snapshot failed for %s",
-                iface_name,
-                exc_info=True,
-            )
+        for public_key, (hs, rx, tx) in (data.get(dev) or {}).items():
+            transfers[(iface_name, public_key)] = (rx, tx)
+            handshakes[(iface_name, public_key)] = hs
 
     return transfers, handshakes
 
@@ -10490,6 +10661,18 @@ def _accumulate_peer_usage(peer, live_total=None):
     offset = max(0, offset)
     persisted = max(0, persisted)
 
+    # A zero reading is either a peer that is not in the runtime (disabled)
+    # or a failed/timed-out read. Resetting the offset on it made the next
+    # sample count the whole kernel counter again (double counting).
+    if live <= 0:
+        if getattr(peer, 'used_bytes_total', None) is None:
+            peer.used_bytes_total = persisted
+            changed = True
+        if getattr(peer, 'bytes_offset', None) is None:
+            peer.bytes_offset = 0
+            changed = True
+        return int(persisted), 0, bool(changed)
+
     if live < offset:
         offset = 0
 
@@ -10522,15 +10705,8 @@ def _accumulate_peer_usage(peer, live_total=None):
     )
 
 def _wg_handshake(peer):
-    try:
-        dev = iface_devname(peer.iface)
-        out = subprocess.check_output(
-            ['wg', 'show', dev, 'latest-handshakes', peer.public_key],
-            stderr=subprocess.DEVNULL, timeout=2.0
-        ).decode().strip().split()[-1]
-        return int(out) if out.isdigit() else 0
-    except Exception:
-        return 0
+    entry = _wg_runtime_entry(peer)
+    return int(entry[0]) if entry else 0
 
 def _wireguard_endpoint(value: str) -> str:
     """
@@ -10763,6 +10939,7 @@ def _wg_enable(peer):
         )
 
     _unblackhole(host_cidr)
+    _wg_dump_invalidate()
 
 def _wg_disable(peer):
     dev = iface_devname(peer.iface)
@@ -10778,38 +10955,76 @@ def _wg_disable(peer):
             'Peer WireGuard address is missing.'
         )
 
-    result = subprocess.run(
-        [
-            'wg',
-            'set',
-            dev,
-            'peer',
-            peer.public_key,
-            'remove',
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=12,
-        check=False,
-    )
-
-    if result.returncode != 0:
-        detail = (
-            result.stderr
-            or result.stdout
-            or 'WireGuard peer removal failed.'
-        ).strip()
-
-        raise RuntimeError(
-            f'Could not disable peer on {dev}: {detail}'
+    # When the interface is down there is no runtime peer to remove; the
+    # config-file removal below is what keeps it disabled when it comes up.
+    if _iface_up(dev):
+        result = subprocess.run(
+            [
+                'wg',
+                'set',
+                dev,
+                'peer',
+                peer.public_key,
+                'remove',
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+            check=False,
         )
 
+        if result.returncode != 0:
+            detail = (
+                result.stderr
+                or result.stdout
+                or 'WireGuard peer removal failed.'
+            ).strip()
+
+            raise RuntimeError(
+                f'Could not disable peer on {dev}: {detail}'
+            )
+
     _blackhole(host_cidr)
+    _wg_dump_invalidate()
+
+    # A disabled/blocked peer must not live in the .conf file, otherwise any
+    # interface restart (wg-quick up / reboot) silently re-enables it.
+    try:
+        _remove_peer(peer)
+    except Exception:
+        current_app.logger.warning(
+            'Could not remove disabled peer %s from config',
+            getattr(peer, 'id', '?'),
+            exc_info=True,
+        )
 
 def _blackhole(host_cidr):
-    subprocess.run(['ip', 'route', 'add', 'blackhole', host_cidr],
+    subprocess.run(['ip', 'route', 'replace', 'blackhole', host_cidr],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _ip_route_batch(lines):
+    """Apply many `ip route ...` lines with one process (errors ignored)."""
+    lines = [l for l in (lines or []) if l]
+    if not lines:
+        return
+    try:
+        subprocess.run(
+            ['ip', '-force', '-batch', '-'],
+            input=('\n'.join(lines) + '\n').encode(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+    except Exception:
+        for l in lines:
+            try:
+                subprocess.run(['ip'] + l.split(), stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=5, check=False)
+            except Exception:
+                pass
 
 def _unblackhole(host_cidr):
     subprocess.run(['ip', 'route', 'del', 'blackhole', host_cidr],
@@ -11724,7 +11939,6 @@ def preview_template(name):
 @app.route('/api/u/<token>')
 def user_peer(token):
     p = _peer_from_shortlink_token(token)
-    _expire()
 
     total = _wg_transfer(p)
     used_total, _delta, usage_changed = _accumulate_peer_usage(p, total)
@@ -11848,14 +12062,18 @@ def _public_ipv4(force=False):
     now = time.time()
     if not force and _public_ip_cache['ip'] and (now - _public_ip_cache['ts'] < 3600):
         return _public_ip_cache['ip']
+    # Failure cache: never block every request on an unreachable lookup service.
+    if not force and (now - float(_public_ip_cache.get('fail_ts') or 0) < 120):
+        return _public_ip_cache['ip']
     try:
         ip = requests.get('https://api.ipify.org', timeout=2).text.strip()
-        if ip:
-            _public_ip_cache['ip'] = ip
-            _public_ip_cache['ts'] = now
-            return ip
+        ipaddress.ip_address(ip)
+        _public_ip_cache['ip'] = ip
+        _public_ip_cache['ts'] = now
+        return ip
     except Exception:
         pass
+    _public_ip_cache['fail_ts'] = now
     return _public_ip_cache['ip']
 
 
@@ -11863,6 +12081,10 @@ def _public_ipv6():
 
     try:
         now = time.time()
+
+        if now - float(_ipv6_cache.get("miss_ts") or 0) < 600:
+            return _ipv6_cache.get("val") or ""
+        _ipv6_cache["miss_ts"] = now
 
         if _ipv6_cache["val"] and (now - _ipv6_cache["ts"] < 600):
             v = (_ipv6_cache["val"] or "").strip()
@@ -12583,7 +12805,7 @@ def _available_ips(iface, limit=MAX_ENUMERATED_HOSTS):
         return []
 
 
-def log_event(peer, event, details=''):
+def log_event(peer, event, details='', commit=True):
     e = PeerEvent(
         peer_id=peer.id,
         timestamp=from_ts(now_ts()),
@@ -12591,7 +12813,8 @@ def log_event(peer, event, details=''):
         details=details,
     )
     db.session.add(e)
-    db.session.commit()
+    if commit:
+        db.session.commit()
 
 def _conv_time_limit(payload):
     """Return the requested duration as fractional days.
@@ -12788,6 +13011,152 @@ def _sync_peer(peer: Peer):
     _peer_to_conf(peer)
 
 
+def _peer_conf_block(peer: Peer) -> str:
+    lines = [
+        '[Peer]',
+        f'PublicKey = {peer.public_key}',
+        f'AllowedIPs = {_host_peer(peer)}',
+    ]
+    fixed_endpoint = (getattr(peer, 'peer_endpoint', None) or '').strip()
+    if fixed_endpoint:
+        lines.append(f'Endpoint = {fixed_endpoint}')
+    if peer.persistent_keepalive:
+        lines.append(f'PersistentKeepalive = {peer.persistent_keepalive}')
+    return '\n'.join(lines) + '\n'
+
+
+def _split_conf_sections(text_body: str):
+    """Return (head_lines, [(public_key, block_lines)]) for a wg conf."""
+    head, blocks = [], []
+    cur = None
+    for line in (text_body or '').replace('\r\n', '\n').split('\n'):
+        st = line.strip()
+        if st.startswith('['):
+            if st.lower() == '[peer]':
+                cur = ['[Peer]']
+                blocks.append(cur)
+                continue
+            cur = None
+        if cur is None:
+            head.append(line)
+        else:
+            cur.append(line)
+    out = []
+    for b in blocks:
+        pk = ''
+        for l in b:
+            ls = l.strip()
+            if ls.lower().startswith('publickey') and '=' in ls:
+                pk = ls.split('=', 1)[1].strip()
+        out.append((pk, b))
+    return head, out
+
+
+def _remove_peers_from_conf(conf_path: str, public_keys) -> int:
+    keys = {k for k in (public_keys or []) if k}
+    if not conf_path or not keys or not os.path.isfile(conf_path):
+        return 0
+    with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+        original = f.read()
+    head, blocks = _split_conf_sections(original)
+    kept = [b for pk, b in blocks if pk not in keys]
+    removed = len(blocks) - len(kept)
+    if removed:
+        body = '\n'.join(head).rstrip('\n')
+        for b in kept:
+            body += '\n\n' + '\n'.join(b).strip('\n')
+        _write_conf_atomic(conf_path, _norm_conftext(body))
+    return removed
+
+
+def _reconcile_local_iface(iface, peers=None):
+    """Make the .conf file, the live runtime and blackhole routes match the
+    database for one local interface, using a handful of processes instead of
+    several per peer. Active peers are in conf+runtime, disabled/blocked peers
+    are in neither."""
+    if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+        return
+    if peers is None:
+        peers = Peer.query.filter_by(iface_id=iface.id).all()
+
+    conf_path = getattr(iface, 'path', None)
+    dev = iface_devname(iface)
+    active = [p for p in peers if (p.status or '') not in ('offline', 'blocked') and p.public_key]
+    inactive = [p for p in peers if (p.status or '') in ('offline', 'blocked') and p.public_key]
+    db_keys = {p.public_key for p in peers if p.public_key}
+
+    if conf_path and os.path.isfile(conf_path):
+        with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+            original = f.read()
+        head, blocks = _split_conf_sections(original)
+        body = '\n'.join(head).rstrip('\n')
+        for pk, b in blocks:
+            if pk and pk not in db_keys:
+                body += '\n\n' + '\n'.join(b).strip('\n')
+        for p in active:
+            try:
+                body += '\n\n' + _peer_conf_block(p).strip('\n')
+            except Exception:
+                current_app.logger.warning('Skipping invalid peer %s in config', p.id)
+        new_text = _norm_conftext(body)
+        if new_text != _norm_conftext(original):
+            _write_conf_atomic(conf_path, new_text)
+
+    if _iface_up(dev):
+        synced = False
+        if conf_path and os.path.isfile(conf_path):
+            tmp = None
+            try:
+                stripped = subprocess.check_output(
+                    ['wg-quick', 'strip', conf_path],
+                    stderr=subprocess.DEVNULL, timeout=20,
+                )
+                fd, tmp = tempfile.mkstemp(prefix='.wgsync.')
+                with os.fdopen(fd, 'wb') as fh:
+                    fh.write(stripped)
+                os.chmod(tmp, 0o600)
+                rc = subprocess.run(['wg', 'syncconf', dev, tmp],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=60, check=False).returncode
+                synced = rc == 0
+            except Exception:
+                synced = False
+            finally:
+                if tmp and os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+        if not synced:
+            runtime = _wg_peer_keys(dev)
+            stale = [p.public_key for p in inactive if p.public_key in runtime]
+            for i in range(0, len(stale), 150):
+                cmd = ['wg', 'set', dev]
+                for k in stale[i:i + 150]:
+                    cmd += ['peer', k, 'remove']
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=60, check=False)
+            for p in active:
+                try:
+                    _wg_enable(p)
+                except Exception:
+                    current_app.logger.warning('Could not enable peer %s on %s', p.id, dev)
+
+    routes = []
+    for p in inactive:
+        try:
+            routes.append(f'route replace blackhole {_host_peer(p)}')
+        except Exception:
+            pass
+    for p in active:
+        try:
+            routes.append(f'route del blackhole {_host_peer(p)}')
+        except Exception:
+            pass
+    _ip_route_batch(routes)
+    _wg_dump_invalidate()
+
+
 def _wg_disable_quiet(peer: Peer):
     try:
         _wg_disable(peer)
@@ -12890,6 +13259,11 @@ def _peer_is_on_node(peer: Peer) -> bool:
 def reapply_peer_external(peer: Peer):
     if _peer_is_on_node(peer):
         node_reapply_peer(peer)
+        return
+
+    # Editing a disabled/blocked peer must not reconnect it.
+    if (getattr(peer, 'status', '') or '') in ('offline', 'blocked'):
+        _wg_disable(peer)
         return
 
     _wg_enable(peer)
@@ -13152,7 +13526,22 @@ def _detect_system_timezone_name() -> str:
     return "UTC"
 
 
+_TZ_NAME_MEMO = {'ts': 0.0, 'val': None}
+
+
 def _panel_timezone_name() -> str:
+    """Memoized for 2s: called several times per peer while listing."""
+    now = time.monotonic()
+    memo = _TZ_NAME_MEMO
+    if memo['val'] and (now - memo['ts']) < 2.0:
+        return memo['val']
+    val = _panel_timezone_name_uncached()
+    memo['val'] = val
+    memo['ts'] = now
+    return val
+
+
+def _panel_timezone_name_uncached() -> str:
     """
     Single timezone source for the whole panel.
     """
@@ -13275,7 +13664,44 @@ def _panel_filter_datetime_utc_naive(value):
         tzinfo=None
     )
 
+_PANEL_SETTINGS_CACHE = {'key': None, 'ts': 0.0, 'val': None}
+_PANEL_SETTINGS_CACHE_LOCK = threading.Lock()
+_PANEL_SETTINGS_TTL = 5.0
+
+
 def _load_panel_settings():
+    """Cached wrapper: the settings file used to be re-read and re-parsed
+    several times per peer on every list refresh."""
+    import copy as _copy
+    try:
+        st = os.stat(PANEL_SETTINGS_FILE)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    now = time.monotonic()
+    cache = _PANEL_SETTINGS_CACHE
+    val = cache.get('val')
+    if val is not None and cache.get('key') == key and (now - cache.get('ts', 0.0)) < _PANEL_SETTINGS_TTL:
+        return _copy.deepcopy(val)
+    fresh = _load_panel_settings_uncached()
+    try:
+        with _PANEL_SETTINGS_CACHE_LOCK:
+            cache.update(key=key, ts=now, val=_copy.deepcopy(fresh))
+    except Exception:
+        pass
+    return fresh
+
+
+def _invalidate_panel_settings_cache():
+    _PANEL_SETTINGS_CACHE['val'] = None
+    try:
+        _TZ_NAME_MEMO['val'] = None
+        _SERVER_HOST_MEMO['ts'] = 0.0
+    except NameError:
+        pass
+
+
+def _load_panel_settings_uncached():
     os.makedirs(app.instance_path, exist_ok=True)
     try:
         with open(PANEL_SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -13374,11 +13800,26 @@ def _cookie_scheme():
     current_app.config["PREFERRED_URL_SCHEME"] = "https" if secure_now else "http"
 
 def _save_panel_settings(j: dict):
+    _invalidate_panel_settings_cache()
     os.makedirs(app.instance_path, exist_ok=True)
     with open(PANEL_SETTINGS_FILE, 'w') as f:
         json.dump(j, f, indent=2)
 
+_SERVER_HOST_MEMO = {'ts': 0.0, 'val': None}
+
+
 def _server_host() -> str | None:
+    now = time.monotonic()
+    memo = _SERVER_HOST_MEMO
+    if memo['ts'] and (now - memo['ts']) < 5.0:
+        return memo['val']
+    val = _server_host_uncached()
+    memo['val'] = val
+    memo['ts'] = now
+    return val
+
+
+def _server_host_uncached() -> str | None:
     s = _load_panel_settings()
     if s.get('tls_enabled') and s.get('domain'):
         return s['domain']
@@ -14360,11 +14801,82 @@ def _disable_peer(peer, reason: str, status: str = 'offline'):
         else:
             _wg_disable(peer)
         peer.status = status
-        log_event(peer, reason, f'status → {status}')
+        log_event(peer, reason, f'status → {status}', commit=False)
         return True
     except Exception:
-        current_app.logger.exception("Disable failed for peer %s", getattr(peer, 'id', '?'))
+        _enforce_warn(peer, reason)
         return False
+
+
+_ENFORCE_WARN_TS = {}
+
+
+def _enforce_warn(peer, reason):
+    """Rate-limited log line for an enforcement action that failed (it is
+    retried every cycle; previously each retry also wrote a DB event)."""
+    key = (getattr(peer, 'id', None), reason)
+    now = time.time()
+    if now - _ENFORCE_WARN_TS.get(key, 0) < 600:
+        return
+    _ENFORCE_WARN_TS[key] = now
+    try:
+        current_app.logger.warning(
+            'Enforcement (%s) could not disable peer %s; will retry',
+            reason, getattr(peer, 'id', '?'), exc_info=True,
+        )
+    except Exception:
+        pass
+
+
+def _peer_over_limits(peer, used_bytes=None) -> bool:
+    """True when a standalone peer is expired or out of data."""
+    if getattr(peer, 'unlimited', False):
+        return False
+    exp = _effective_expiry_ts(peer)
+    if exp and now_ts() >= exp:
+        return True
+    lim = peer.limit_bytes() if hasattr(peer, 'limit_bytes') else None
+    if lim is not None:
+        used = int(getattr(peer, 'used_bytes_total', 0) or 0) if used_bytes is None else int(used_bytes)
+        if used >= lim:
+            return True
+    return False
+
+
+def _reenable_blocked_peer(peer, note='Renewed: limits allow access again') -> bool:
+    """Bring a peer that the enforcer blocked back online (runtime + conf).
+    Admin-disabled peers have status 'offline' and are never touched."""
+    if (getattr(peer, 'status', '') or '') != 'blocked':
+        return False
+    iface = getattr(peer, 'iface', None)
+    if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+        return False
+    try:
+        if _iface_up(iface_devname(iface)):
+            _wg_enable(peer)
+        else:
+            _unblackhole(_host_peer(peer))
+        _sync_peer(peer)
+    except Exception:
+        _enforce_warn(peer, 'unblock')
+        return False
+    peer.status = 'online'
+    log_event(peer, 'unblocked', note, commit=False)
+    return True
+
+
+def _auto_unblock_peer(peer, used_bytes=None) -> bool:
+    """Standalone peer renewed (more days / more data) -> unblock it."""
+    if (getattr(peer, 'status', '') or '') != 'blocked':
+        return False
+    try:
+        if SubscriptionPeer.query.filter_by(peer_id=peer.id).first() is not None:
+            return False
+    except Exception:
+        return False
+    if _peer_over_limits(peer, used_bytes):
+        return False
+    return _reenable_blocked_peer(peer)
 # ----------------------
 # Expiry  + total usage
 # ______________________
@@ -14447,6 +14959,7 @@ def _expire():
                         'First WireGuard '
                         'handshake recorded'
                     ),
+                    commit=False,
                 )
 
                 changed = True
@@ -14538,6 +15051,12 @@ def _expire():
             peer.expires_at = from_ts(expiry_ts)
             changed = True
 
+        # Renewal: the admin/bot extended the date or the data limit of a peer
+        # that the enforcer had blocked -> put it back online automatically.
+        if peer.status == 'blocked' and not _peer_over_limits(peer, used_effective):
+            if _reenable_blocked_peer(peer):
+                changed = True
+
         if (
             expiry_ts
             and now >= expiry_ts
@@ -14549,14 +15068,16 @@ def _expire():
                 status='blocked',
             )
 
-            log_event(
-                peer,
-                'expired',
-                (
-                    'Expired at '
-                    f'{isoz(from_ts(expiry_ts))}'
-                ),
-            )
+            if disabled:
+                log_event(
+                    peer,
+                    'expired',
+                    (
+                        'Expired at '
+                        f'{isoz(from_ts(expiry_ts))}'
+                    ),
+                    commit=False,
+                )
 
             if disabled:
                 peer_name = (
@@ -14654,13 +15175,15 @@ def _expire():
                 status='blocked',
             )
 
-            log_event(
-                peer,
-                'limit_reached',
-                (
-                    f'Used {used_effective} bytes'
-                ),
-            )
+            if disabled:
+                log_event(
+                    peer,
+                    'limit_reached',
+                    (
+                        f'Used {used_effective} bytes'
+                    ),
+                    commit=False,
+                )
 
             if disabled:
                 peer_name = (
@@ -14767,6 +15290,12 @@ def _expire():
                     'subscription_' + str(access.get('reason') or 'blocked'),
                 ):
                     changed = True
+            elif getattr(sub, 'enabled', True):
+                for link in list(getattr(sub, 'links', []) or []):
+                    lp = getattr(link, 'peer', None)
+                    if lp is not None and (lp.status or '') == 'blocked':
+                        if _reenable_blocked_peer(lp, 'Subscription renewed: access allowed again'):
+                            changed = True
         except Exception:
             current_app.logger.exception(
                 'Subscription lifecycle enforcement failed for subscription %s',
@@ -14894,8 +15423,9 @@ def _start_expiry_enforcer():
     t.start()
 
 
-@app.before_request
 def _expiry_tick_on_requests():
+    # Disabled: enforcement runs only in the single background enforcer
+    # (gunicorn master). Running it inside requests made the panel hang.
     """
     Fallback : any panel/API activity can enforce expiry,
     not only the Peers tab.
@@ -14929,20 +15459,20 @@ def peer_clear_total(pid):
     return jsonify(success=True, cleared=prev)
 
 def _on_boot():
+    groups = {}
     for peer in Peer.query.all():
-        try:
-            if (peer.iface and
-                (getattr(peer.iface, 'node_id', None) is not None or
-                 ':' in (peer.iface.name or ''))):
-                continue
+        iface = getattr(peer, 'iface', None)
+        if iface is None:
+            continue
+        if getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+            continue
+        groups.setdefault(iface.id, (iface, []))[1].append(peer)
 
-            if peer.status in ('offline', 'blocked'):
-                _wg_disable(peer)
-            else:
-                _wg_enable(peer)
-            _sync_peer(peer)
+    for iface, peers in groups.values():
+        try:
+            _reconcile_local_iface(iface, peers)
         except Exception as e:
-            current_app.logger.warning("Reconcile peer %s failed: %s", peer.name, e)
+            current_app.logger.warning("Reconcile interface %s failed: %s", getattr(iface, 'name', '?'), e)
     db.session.commit()
 
 
@@ -15067,7 +15597,7 @@ def _repair_legacy_timer_rows():
             os.path.isfile(DB_PATH)
             and not os.path.exists(_TIME_REPAIR_BACKUP)
         ):
-            shutil.copy2(DB_PATH, _TIME_REPAIR_BACKUP)
+            _sqlite_snapshot(DB_PATH, _TIME_REPAIR_BACKUP)
     except Exception:
         app.logger.warning(
             'Could not create pre-time-fix database backup',
@@ -15318,18 +15848,10 @@ def node_health(nid):
         return jsonify(online=False), 200
 
 def _wg_rx_tx(peer):
-    try:
-        out = subprocess.check_output(
-            ['wg', 'show', peer.iface.name, 'transfer'],
-            stderr=subprocess.DEVNULL, timeout=2.0
-        ).decode().splitlines()
-        for ln in out:
-            parts = ln.split()
-            if len(parts) >= 3 and parts[0] == peer.public_key:
-                return int(parts[1]), int(parts[2])
-    except Exception:
-        pass
-    return 0, 0
+    entry = _wg_runtime_entry(peer)
+    if not entry:
+        return 0, 0
+    return int(entry[1]), int(entry[2])
 
 @app.route('/api/nodes/<int:nid>/summary')
 @admin_required
@@ -15397,18 +15919,8 @@ def node_summary(nid):
     })
 
 def _latest_handshake(peer):
-    try:
-        out = subprocess.check_output(
-            ['wg', 'show', peer.iface.name, 'latest-handshakes'],
-            stderr=subprocess.DEVNULL, timeout=2.0
-        ).decode().splitlines()
-        for ln in out:
-            parts = ln.split()
-            if len(parts) >= 2 and parts[0] == peer.public_key:
-                return int(parts[1]) if parts[1].isdigit() else 0
-    except Exception:
-        pass
-    return 0
+    entry = _wg_runtime_entry(peer)
+    return int(entry[0]) if entry else 0
 
 def _peer_ip_plain(peer) -> str:
     try:
@@ -17584,10 +18096,6 @@ def node_peers(nid):
     if request.method == 'GET':
         iface = (request.args.get('iface') or '').strip()
         iface_id = (request.args.get('iface_id') or '').strip()
-        try:
-            _expire()
-        except Exception:
-            pass
         if not iface and iface_id:
             parts = iface_id.split(':', 1)
             if len(parts) == 2:
@@ -20245,16 +20753,103 @@ def peers_create():
         telegram_id=peer.telegram_id or ''
     ), 200
 
+_PEERS_CACHE_DIR = os.path.join(app.instance_path, 'cache')
+_PEERS_GEN_FILE = os.path.join(_PEERS_CACHE_DIR, 'peers.gen')
+try:
+    _PEERS_CACHE_TTL = float(os.getenv('WG_PEERS_CACHE_SEC', '4'))
+except Exception:
+    _PEERS_CACHE_TTL = 4.0
+
+
+def _peers_cache_gen():
+    try:
+        return os.stat(_PEERS_GEN_FILE).st_mtime
+    except OSError:
+        return 0.0
+
+
+def _peers_cache_bump():
+    try:
+        os.makedirs(_PEERS_CACHE_DIR, exist_ok=True)
+        with open(_PEERS_GEN_FILE, 'w') as fh:
+            fh.write(str(time.time()))
+    except Exception:
+        pass
+
+
+@app.after_request
+def _peers_cache_bump_on_write(resp):
+    try:
+        if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and resp.status_code < 400:
+            _peers_cache_bump()
+    except Exception:
+        pass
+    return resp
+
+
+def _json_bytes_response(body: bytes, extra_headers=None):
+    resp = make_response(body)
+    resp.mimetype = 'application/json'
+    accept = (request.headers.get('Accept-Encoding') or '').lower()
+    if 'gzip' in accept and len(body) > 2048:
+        import gzip as _gzip
+        resp.set_data(_gzip.compress(body, compresslevel=1))
+        resp.headers['Content-Encoding'] = 'gzip'
+        resp.headers['Vary'] = 'Accept-Encoding'
+    for k, v in (extra_headers or {}).items():
+        resp.headers[k] = v
+    return resp
+
+
+def _peers_response_cache(fn):
+    """Serve identical /api/peers results to all workers/callers for a few
+    seconds. The cache is shared through files, dropped on any successful
+    write request, and never stores error results. Runs after auth."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _PEERS_CACHE_TTL <= 0 or request.method != 'GET':
+            return fn(*args, **kwargs)
+        if request.args.get('id') or request.args.get('name'):
+            return fn(*args, **kwargs)   # tiny single-peer answer, no cache file
+        import hashlib as _hashlib
+        items = sorted((k, v) for k, v in request.args.items(multi=True) if k != '_')
+        key = _hashlib.sha1(repr(items).encode()).hexdigest()[:16]
+        cache_path = os.path.join(_PEERS_CACHE_DIR, f'peers-{key}.json')
+        gen_before = _peers_cache_gen()
+        try:
+            st = os.stat(cache_path)
+            if (time.time() - st.st_mtime) < _PEERS_CACHE_TTL and st.st_mtime >= gen_before:
+                with open(cache_path, 'rb') as fh:
+                    return _json_bytes_response(fh.read(), {'X-Peers-Cache': 'hit'})
+        except OSError:
+            pass
+
+        started = time.monotonic()
+        resp = make_response(fn(*args, **kwargs))
+        took = time.monotonic() - started
+        if took > 2.0:
+            current_app.logger.warning('/api/peers took %.2fs', took)
+        if resp.status_code != 200 or resp.mimetype != 'application/json':
+            return resp
+        body = resp.get_data()
+        if not body.lstrip().startswith(b'{"error"') and _peers_cache_gen() == gen_before:
+            try:
+                os.makedirs(_PEERS_CACHE_DIR, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(prefix='.peers.', dir=_PEERS_CACHE_DIR)
+                with os.fdopen(fd, 'wb') as fh:
+                    fh.write(body)
+                os.replace(tmp, cache_path)
+            except Exception:
+                pass
+        return _json_bytes_response(body, {'X-Peers-Cache': 'miss', 'X-Response-Time': f'{took:.3f}'})
+    return wrapper
+
+
 @app.route('/api/peers')
 @require_api_key_or_login
+@_peers_response_cache
 def panel_peers():
 
-    try:
-        _expire()
-    except Exception:
-        current_app.logger.exception(
-            "Peer expiration processing failed during refresh"
-        )
 
     try:
         server_public_ip = _public_ipv4()
@@ -20272,8 +20867,17 @@ def panel_peers():
         request.args.get('iface') or ''
     ).strip()
 
+    # Single-peer lookups for API clients (bot): /api/peers?name=X or ?id=N
+    peer_id_filter = request.args.get('id', type=int)
+    peer_name_filter = (request.args.get('name') or '').strip()
+
     try:
         query = Peer.query
+
+        if peer_id_filter is not None:
+            query = query.filter(Peer.id == peer_id_filter)
+        if peer_name_filter:
+            query = query.filter(func.lower(Peer.name) == peer_name_filter.lower())
 
         if interface_id is not None:
             query = query.filter(
@@ -20353,6 +20957,12 @@ def panel_peers():
         ]
     )
 
+    shortlink_tokens = {}
+    try:
+        for pid_, token_ in db.session.query(ShortLink.peer_id, ShortLink.token).all():
+            shortlink_tokens.setdefault(int(pid_), token_)
+    except Exception:
+        current_app.logger.exception("Could not preload shortlinks")
     usage_dirty = False
     current_timestamp = now_ts()
 
@@ -20454,12 +21064,8 @@ def panel_peers():
             shortlink_url = ''
 
             try:
-                (
-                    shortlink_token,
-                    shortlink_url,
-                ) = _shortlink_from_peer_id(
-                    peer.id
-                )
+                shortlink_token = shortlink_tokens.get(int(peer.id)) or ''
+                shortlink_url = _shortlink_url(shortlink_token) if shortlink_token else ''
 
                 if not shortlink_token or not shortlink_url:
                     (
@@ -21277,7 +21883,8 @@ def panel_peers_bulk():
 @require_api_key_or_login
 def iface_available_ips(iface_id):
     iface = db.session.get(InterfaceConfig, iface_id) or abort(404)
-    return jsonify(available_ips=_available_ips(iface))
+    full = _available_ips(iface)
+    return jsonify(available_ips=full[:512], available_count=len(full))
 
 def _private_networks():
 
@@ -21379,7 +21986,8 @@ def get_interfaces():
             'listen_port': i.listen_port,
             'mtu': i.mtu,
             'dns': i.dns,
-            'available_ips': _available_ips(i),
+            'available_ips': (_avail_list := _available_ips(i))[:256],
+            'available_count': len(_avail_list),
             'is_up': _iface_up(i.name),
         }
 
@@ -21724,6 +22332,14 @@ def create_local_interface():
         for value in parsed_addresses
     )
 
+    clash = _local_iface_overlap(parsed_addresses)
+    if clash:
+        return jsonify(
+            ok=False,
+            error="address_overlap",
+            detail=f"This subnet overlaps interface {clash}. Choose a different range.",
+        ), 409
+
     try:
         listen_port = int(
             data.get("listen_port")
@@ -22067,7 +22683,8 @@ def create_local_interface():
             "listen_port": iface.listen_port,
             "dns": iface.dns,
             "mtu": iface.mtu,
-            "available_ips": _available_ips(iface),
+            "available_ips": (_avail_new := _available_ips(iface))[:256],
+            "available_count": len(_avail_new),
             "is_up": _iface_up(name),
             "post_up": post_up,
             "post_down": post_down,
@@ -23530,6 +24147,13 @@ def api_edit(pid):
 
         db.session.commit()
 
+        try:
+            if _auto_unblock_peer(p):
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.warning('Auto-unblock after edit failed for peer %s', pid, exc_info=True)
+
     except Exception as exc:
         db.session.rollback()
 
@@ -23684,6 +24308,389 @@ def api_edit_node_peer(nid, pub):
         ), 404
 
     return api_edit(p.id)
+
+
+# =====================================================================
+# Subnet resize / overlap helpers
+# =====================================================================
+def _iface_networks(iface):
+    nets = []
+    for token in re.split(r'[\s,]+', getattr(iface, 'address', '') or ''):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            nets.append(ipaddress.ip_interface(token).network)
+        except ValueError:
+            continue
+    return nets
+
+
+def _local_iface_overlap(new_ifaces, exclude_id=None):
+    """Name of a local interface whose subnet overlaps any of new_ifaces."""
+    new_nets = []
+    for v in new_ifaces or []:
+        try:
+            new_nets.append(ipaddress.ip_interface(str(v)).network)
+        except ValueError:
+            continue
+    for other in InterfaceConfig.query.all():
+        if exclude_id is not None and other.id == exclude_id:
+            continue
+        if getattr(other, 'node_id', None) is not None or ':' in (other.name or ''):
+            continue
+        for net in _iface_networks(other):
+            for nn in new_nets:
+                if nn.version == net.version and nn.overlaps(net):
+                    return other.name
+    return None
+
+
+def _resize_hook_text(value, old_if, new_if):
+    if not value:
+        return value
+    out = value
+    for old_s, new_s in ((str(old_if), str(new_if)), (str(old_if.network), str(new_if.network))):
+        out = re.sub(r'(?<![\d.])' + re.escape(old_s) + r'(?![\d/])', new_s, out)
+    return out
+
+
+def _resize_conf_text(text_body, old_if, new_if):
+    lines = (text_body or '').replace('\r\n', '\n').split('\n')
+    out, section = [], ''
+    for line in lines:
+        st = line.strip()
+        if st.startswith('[') and st.endswith(']'):
+            section = st.lower()
+            out.append(line)
+            continue
+        if section == '[interface]' and '=' in st and not st.startswith('#'):
+            key = st.split('=', 1)[0].strip().lower()
+            if key == 'address':
+                prefix, val = line.split('=', 1)
+                parts = []
+                for tok in val.split(','):
+                    t = tok.strip()
+                    try:
+                        ii = ipaddress.ip_interface(t)
+                        if ii.version == old_if.version and ii.ip == old_if.ip:
+                            t = str(new_if)
+                    except ValueError:
+                        pass
+                    parts.append(t)
+                line = prefix.rstrip() + ' = ' + ', '.join(p for p in parts if p)
+            elif key in ('preup', 'postup', 'predown', 'postdown'):
+                line = _resize_hook_text(line, old_if, new_if)
+        out.append(line)
+    return '\n'.join(out)
+
+
+@app.post('/api/iface/<int:iid>/resize')
+@csrf.exempt
+@login_required
+def api_iface_resize(iid):
+    """Change the prefix of a local interface (e.g. /24 -> /20) keeping the
+    server IP and every peer address. NAT rules are rewritten and the
+    interface is restarted once (a few seconds of reconnect)."""
+    iface = db.session.get(InterfaceConfig, iid) or abort(404)
+    if getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+        return jsonify(ok=False, error='node_interface', detail='Only local interfaces can be resized here.'), 400
+
+    data = request.get_json(silent=True) or {}
+    try:
+        prefix = int(str(data.get('prefix', '')).strip().lstrip('/'))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='invalid_prefix', detail='Prefix must be a number such as 20.'), 400
+    if not 16 <= prefix <= 30:
+        return jsonify(ok=False, error='invalid_prefix', detail='Prefix must be between /16 and /30.'), 400
+
+    old_if = None
+    for token in re.split(r'[\s,]+', iface.address or ''):
+        try:
+            cand = ipaddress.ip_interface(token.strip())
+        except ValueError:
+            continue
+        if cand.version == 4:
+            old_if = cand
+            break
+    if old_if is None:
+        return jsonify(ok=False, error='no_ipv4', detail='Interface has no IPv4 address.'), 400
+
+    new_if = ipaddress.ip_interface(f'{old_if.ip}/{prefix}')
+    if new_if.network == old_if.network:
+        return jsonify(ok=True, unchanged=True, address=iface.address)
+
+    net = new_if.network
+    outside = []
+    for peer in Peer.query.filter_by(iface_id=iid).all():
+        try:
+            host = ipaddress.ip_interface(peer.address).ip
+        except Exception:
+            continue
+        if host.version != 4:
+            continue
+        if host not in net or host in (net.network_address, net.broadcast_address):
+            outside.append(peer.address)
+    if outside:
+        return jsonify(ok=False, error='peers_outside_subnet',
+                       detail=f'{len(outside)} peer(s) would fall outside {net}.',
+                       sample=outside[:10]), 409
+
+    clash = _local_iface_overlap([new_if], exclude_id=iid)
+    if clash:
+        return jsonify(ok=False, error='address_overlap',
+                       detail=f'{net} overlaps interface {clash}.'), 409
+
+    conf_path = iface.path or ''
+    if not conf_path or not os.path.isfile(conf_path):
+        return jsonify(ok=False, error='conf_missing', detail=f'Config file not found: {conf_path}'), 500
+
+    with open(conf_path, 'r', encoding='utf-8', errors='ignore') as fh:
+        old_text = fh.read()
+    new_text = _resize_conf_text(old_text, old_if, new_if)
+
+    old_fields = (iface.address, iface.post_up, iface.post_down)
+    dev = iface_devname(iface)
+    was_up = _iface_up(dev)
+
+    try:
+        if was_up:
+            _iface_down(dev)
+        _write_conf_atomic(conf_path, _norm_conftext(new_text))
+        iface.address = _resize_hook_text(iface.address, old_if, new_if) if str(old_if) in (iface.address or '') else str(new_if)
+        iface.post_up = _resize_hook_text(iface.post_up, old_if, new_if)
+        iface.post_down = _resize_hook_text(iface.post_down, old_if, new_if)
+        db.session.flush()
+        if was_up:
+            _check_iface_up(iface)
+            if not _iface_up(dev):
+                raise RuntimeError(f'{dev} did not come back up')
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        try:
+            iface = db.session.get(InterfaceConfig, iid)
+            iface.address, iface.post_up, iface.post_down = old_fields
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        try:
+            if _iface_up(dev):
+                _iface_down(dev)
+            _write_conf_atomic(conf_path, old_text)
+            if was_up:
+                _check_iface_up(iface)
+        except Exception:
+            current_app.logger.exception('Resize rollback failed for %s', dev)
+        current_app.logger.exception('Interface resize failed for %s', dev)
+        return jsonify(ok=False, error='resize_failed', detail=str(exc)), 500
+
+    try:
+        if was_up:
+            _reconcile_local_iface(iface)
+    except Exception:
+        current_app.logger.warning('Reconcile after resize failed for %s', dev, exc_info=True)
+
+    try:
+        _iface_log(iid, f'Subnet changed {old_if} -> {new_if}')
+    except Exception:
+        pass
+    logpanel_action('iface_resize', f'iface={iface.name}; {old_if} -> {new_if}')
+
+    full = _available_ips(iface)
+    return jsonify(ok=True, address=iface.address, network=str(net),
+                   available_count=len(full), restarted=was_up)
+
+
+# =====================================================================
+# Rotate keys + user link (old config and old link stop working)
+# =====================================================================
+def _new_wg_keypair():
+    priv = subprocess.check_output(['wg', 'genkey'], timeout=5).decode().strip()
+    pub = subprocess.check_output(['wg', 'pubkey'], input=(priv + '\n').encode(), timeout=5).decode().strip()
+    if not _valid_wg_key(pub):
+        raise RuntimeError('wg pubkey returned an invalid key')
+    return priv, pub
+
+
+def _rotate_local_peer(peer):
+    iface = peer.iface
+    dev = iface_devname(iface)
+    is_up = _iface_up(dev)
+    active = (peer.status or '') not in ('offline', 'blocked')
+
+    # Bank the traffic used so far under the old key.
+    _wg_dump_invalidate()
+    try:
+        _accumulate_peer_usage(peer, _wg_transfer(peer))
+    except Exception:
+        pass
+
+    old_pub, old_priv = peer.public_key, peer.private_key
+    priv, pub = _new_wg_keypair()
+
+    if is_up:
+        subprocess.run(['wg', 'set', dev, 'peer', old_pub, 'remove'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=12, check=False)
+    _remove_peer(peer)
+
+    peer.public_key = pub
+    peer.private_key = priv
+    peer.bytes_offset = 0
+    try:
+        if active:
+            if is_up:
+                _wg_enable(peer)
+            _peer_to_conf(peer)
+    except Exception:
+        peer.public_key, peer.private_key = old_pub, old_priv
+        if active:
+            try:
+                if is_up:
+                    _wg_enable(peer)
+                _peer_to_conf(peer)
+            except Exception:
+                current_app.logger.exception('Could not restore old key for peer %s', peer.id)
+        raise
+    _wg_dump_invalidate()
+    return old_pub
+
+
+def _new_short_token(model):
+    for _ in range(20):
+        t = secrets.token_urlsafe(16)
+        if not model.query.filter_by(token=t).first():
+            return t
+    return secrets.token_urlsafe(24)
+
+
+@app.post('/api/peer/<int:pid>/rotate')
+@csrf.exempt
+@require_api_key_or_login
+def api_peer_rotate(pid):
+    peer = db.session.get(Peer, pid) or abort(404)
+    if _peer_is_on_node(peer):
+        return jsonify(ok=False, error='node_peer', detail='Rotation is only supported for local peers.'), 400
+    try:
+        old_pub = _rotate_local_peer(peer)
+        _delete_shortlinks_for_peer_ids([peer.id])
+        link = ShortLink(token=_new_short_token(ShortLink), peer_id=peer.id)
+        db.session.add(link)
+
+        rotated_subs = []
+        for sl in SubscriptionPeer.query.filter_by(peer_id=peer.id).all():
+            sub = db.session.get(Subscription, sl.subscription_id)
+            if sub is not None:
+                sub.token = _new_short_token(Subscription)
+                rotated_subs.append(sub.id)
+
+        log_event(peer, 'rotated', f'Keys and user link regenerated (old key {old_pub[:8]}…)', commit=False)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception('Rotate failed for peer %s', pid)
+        return jsonify(ok=False, error='rotate_failed', detail=str(exc)), 500
+
+    logpanel_action('peer_rotate', f'pid={pid}')
+    return jsonify(
+        ok=True,
+        id=peer.id,
+        public_key=peer.public_key,
+        shortlink=_shortlink_url(link.token),
+        shortlink_token=link.token,
+        rotated_subscriptions=rotated_subs,
+    )
+
+
+# =====================================================================
+# Bulk delete
+# =====================================================================
+@app.post('/api/peers/bulk_delete')
+@csrf.exempt
+@require_api_key_or_login
+def api_peers_bulk_delete():
+    data = request.get_json(silent=True) or {}
+    ids = []
+    for x in (data.get('ids') or []):
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    ids = sorted(set(ids))[:10000]
+    if not ids:
+        return jsonify(ok=False, error='no_ids'), 400
+
+    peers = Peer.query.filter(Peer.id.in_(ids)).all()
+    failed, done_ids = [], []
+
+    groups = {}
+    for peer in peers:
+        if _peer_is_on_node(peer):
+            try:
+                remove_peer_everywhere(peer)
+                done_ids.append(peer.id)
+            except Exception as exc:
+                failed.append({'id': peer.id, 'error': str(exc)})
+            continue
+        groups.setdefault(peer.iface_id, (peer.iface, []))[1].append(peer)
+
+    for iface, plist in groups.values():
+        if iface is None:
+            done_ids.extend(p.id for p in plist)
+            continue
+        dev = iface_devname(iface)
+        keys = [p.public_key for p in plist if p.public_key]
+        if _iface_up(dev):
+            for i in range(0, len(keys), 150):
+                cmd = ['wg', 'set', dev]
+                for k in keys[i:i + 150]:
+                    cmd += ['peer', k, 'remove']
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=60, check=False)
+            still = _wg_peer_keys(dev) & set(keys)
+        else:
+            still = set()
+        ok_peers = [p for p in plist if p.public_key not in still]
+        for p in plist:
+            if p.public_key in still:
+                failed.append({'id': p.id, 'error': f'still present in {dev} runtime'})
+        try:
+            _remove_peers_from_conf(iface.path, [p.public_key for p in ok_peers])
+        except Exception as exc:
+            for p in ok_peers:
+                failed.append({'id': p.id, 'error': f'config: {exc}'})
+            continue
+        routes = []
+        for p in ok_peers:
+            try:
+                routes.append(f'route del blackhole {_host_peer(p)}')
+            except Exception:
+                pass
+        _ip_route_batch(routes)
+        done_ids.extend(p.id for p in ok_peers)
+
+    _wg_dump_invalidate()
+    deleted = 0
+    remaining = [i for i in done_ids if db.session.get(Peer, i) is not None]
+    if remaining:
+        try:
+            for i in range(0, len(remaining), 500):
+                chunk = remaining[i:i + 500]
+                _delete_shortlinks_for_peer_ids(chunk)
+                SubscriptionPeer.query.filter(SubscriptionPeer.peer_id.in_(chunk)).delete(synchronize_session=False)
+                PeerEvent.query.filter(PeerEvent.peer_id.in_(chunk)).delete(synchronize_session=False)
+                deleted += Peer.query.filter(Peer.id.in_(chunk)).delete(synchronize_session=False)
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            current_app.logger.exception('Bulk delete DB phase failed')
+            return jsonify(ok=False, error='database', detail=str(exc), failed=failed), 500
+    db.session.expire_all()
+
+    deleted += len(done_ids) - len(remaining)
+    logpanel_action('peer_bulk_delete', f'requested={len(ids)}; deleted={deleted}; failed={len(failed)}')
+    return jsonify(ok=not failed, deleted=deleted, failed=failed)
+
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
 @csrf.exempt
@@ -25796,11 +26803,9 @@ def _block_subscription_runtime(sub, reason='subscription_blocked'):
             ok = False
 
         if not ok:
-            peer.status = 'blocked'
-            try:
-                log_event(peer, reason, 'status → blocked')
-            except Exception:
-                pass
+            # Leave the status untouched so the next cycle retries; marking it
+            # 'blocked' here left the user connected forever.
+            continue
 
         changed = True
 
@@ -32057,6 +33062,62 @@ if __name__ == "__main__":
 
     from gunicorn.app.base import BaseApplication
 
+    def _wgp_install_conn_timeouts():
+        """Give every client connection an inactivity timeout.
+
+        gthread workers run the TLS handshake and the request read inside a
+        pool thread on a blocking socket with NO timeout. A client (scanner,
+        bot, broken network) that connects and then stalls holds that thread
+        forever, and unlike sync workers the arbiter never recycles it because
+        the worker's main loop keeps heart-beating. Once every pool thread is
+        stuck the panel stops answering entirely. A per-socket timeout makes
+        such connections fail and free their thread after WG_CONN_TIMEOUT s.
+        """
+        import ssl as _ssl
+        try:
+            conn_timeout = float(os.getenv("WG_CONN_TIMEOUT", "30"))
+        except Exception:
+            conn_timeout = 30.0
+        if conn_timeout <= 0:
+            return
+
+        # 1) TLS: the handshake happens right after wrap_socket(server_side=True).
+        orig_wrap = _ssl.SSLContext.wrap_socket
+        if not getattr(orig_wrap, "_wgp_timeout", False):
+            def _wrap_with_timeout(ctx, sock, *args, **kwargs):
+                server_side = kwargs.get("server_side", args[0] if args else False)
+                if server_side:
+                    try:
+                        sock.settimeout(conn_timeout)
+                    except Exception:
+                        pass
+                return orig_wrap(ctx, sock, *args, **kwargs)
+            _wrap_with_timeout._wgp_timeout = True
+            _ssl.SSLContext.wrap_socket = _wrap_with_timeout
+
+        # 2) Plain HTTP / anything reset by setblocking(True) inside init().
+        try:
+            from gunicorn.workers import gthread as _gt
+            tconn = getattr(_gt, "TConn", None)
+            if tconn is not None and not getattr(tconn, "_wgp_timeout", False):
+                orig_init = tconn.init
+
+                def _init_with_timeout(self, *a, **kw):
+                    result = orig_init(self, *a, **kw)
+                    try:
+                        self.sock.settimeout(conn_timeout)
+                    except Exception:
+                        pass
+                    return result
+
+                tconn.init = _init_with_timeout
+                tconn._wgp_timeout = True
+        except Exception:
+            app.logger.warning("Could not patch gthread connection timeout", exc_info=True)
+
+        app.logger.info("Client connection timeout: %ss", conn_timeout)
+
+
     try:
         if int(rt.get("workers", 0)) > 0:
             os.environ["WORKERS"] = str(rt["workers"])
@@ -32092,10 +33153,11 @@ if __name__ == "__main__":
         except Exception:
             return dflt
 
-    cpu_based_default_workers = multiprocessing.cpu_count() * 2 + 1
+    # SQLite + one enforcer: a few threaded workers beat many sync workers.
+    cpu_based_default_workers = min(4, max(2, multiprocessing.cpu_count()))
     workers          = _env_int("WORKERS", cpu_based_default_workers)
-    threads          = _env_int("THREADS", 4)
-    timeout          = _env_int("TIMEOUT", 60)
+    threads          = max(1, _env_int("THREADS", 8))
+    timeout          = _env_int("TIMEOUT", 120)
     graceful_timeout = _env_int("GRACEFUL_TIMEOUT", 30)
     loglevel         = (os.getenv("LOGLEVEL") or "info").lower()
 
@@ -32114,14 +33176,15 @@ if __name__ == "__main__":
     app.logger.info("Panel started (TLS=%s, bind=%s)", "on" if tls_enabled else "off", bind)
     from importlib.metadata import version as _package_version
     app.logger.info(
-        "Gunicorn runtime: version=%s worker=sync workers=%s timeout=%ss",
-        _package_version("gunicorn"), workers, timeout,
+        "Gunicorn runtime: version=%s worker=gthread workers=%s threads=%s timeout=%ss",
+        _package_version("gunicorn"), workers, threads, timeout,
     )
 
     options = {
         "bind": bind,
         "workers": workers,
-        "worker_class": "sync",
+        "worker_class": "gthread" if threads > 1 else "sync",
+        "threads": threads,
         "timeout": timeout,
         "graceful_timeout": graceful_timeout,
         "accesslog": "-",
@@ -32155,6 +33218,7 @@ if __name__ == "__main__":
     except Exception as e:
         app.logger.exception("bootstrap failed: %s", e)
 
+    _wgp_install_conn_timeouts()
     _Guni(app, options).run()
 
 

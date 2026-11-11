@@ -73,7 +73,7 @@ TAG_ERR  = "[ERROR]"
 TAG_RUN  = "[RUN]"
 
 
-REPO_URL = "https://github.com/Azumi67/WG_Panel"
+REPO_URL = "https://github.com/vtajook/wireguard-dashboard"
 REPO_DIRNAME_DEFAULT = "WG_Panel"
 
 
@@ -3569,7 +3569,7 @@ def _github_json(url: str, timeout: int = 20):
 def _github_panel_releases() -> List[dict]:
     data = _github_json(
         "https://api.github.com/repos/"
-        "Azumi67/WG_Panel/releases?per_page=40"
+        "vtajook/wireguard-dashboard/releases?per_page=40"
     )
 
     if not isinstance(data, list):
@@ -3590,7 +3590,7 @@ def _github_panel_releases() -> List[dict]:
             continue
 
         zip_url = (
-            "https://github.com/Azumi67/WG_Panel/"
+            "https://github.com/vtajook/wireguard-dashboard/"
             f"archive/refs/tags/{tag}.zip"
         )
 
@@ -4351,7 +4351,7 @@ def main_menu():
     while True:
         root = get_project()
         clear()
-        print(c("WG Panel Control", BR_WHT + BOLD) + "  " + c("Azumi67/WG_Panel", BR_CYN))
+        print(c("WG Panel Control", BR_WHT + BOLD) + "  " + c("vtajook/wireguard-dashboard", BR_CYN))
         print(hr("═", BR_CYN))
         print(render_status(root))
         print()

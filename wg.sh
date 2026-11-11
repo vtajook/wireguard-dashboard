@@ -5,7 +5,7 @@ BOOTSTRAP_DIR="${WG_BOOTSTRAP_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/wg-pa
 VENV_DIR="${VENV_DIR:-$BOOTSTRAP_DIR/venv}"
 PY="$VENV_DIR/bin/python"
 
-DEFAULT_WG_URL="https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py"
+DEFAULT_WG_URL="https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/wg.py"
 
 APT_PKGS=(
   sudo
@@ -53,7 +53,7 @@ Examples:
   sudo $0
   sudo $0 --force-fetch
   sudo $0 --wg-py /root/wg.py
-  sudo $0 https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py
+  sudo $0 https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/wg.py
   sudo $0 -- --no-color
 EOF
 }

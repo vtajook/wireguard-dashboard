@@ -229,6 +229,10 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='css/control-polish.css') }}"
     />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/responsive-fix.css') }}"
+    />
     <script
       defer
       src="{{ url_for('static', filename='js/switch-polish.js') }}"
@@ -594,7 +598,7 @@
           </div>
           <div class="sb2-footer-actions">
             <a
-              href="{{ PANEL_REPO_URL|default('https://github.com/Azumi67/WG_Panel') }}"
+              href="{{ PANEL_REPO_URL|default('https://github.com/vtajook/wireguard-dashboard') }}"
               target="_blank"
               rel="noopener"
               class="sb2-footer-icon"

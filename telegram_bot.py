@@ -1859,7 +1859,7 @@ def _api_data(method: str, path: str, *, payload: dict | None = None, timeout: i
     except Exception as exc:
         return {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
 
-GITHUB_REPO = "Azumi67/WG_Panel"
+GITHUB_REPO = "vtajook/wireguard-dashboard"
 GITHUB_MAIN_ARCHIVE = (
     "https://codeload.github.com/"
     f"{GITHUB_REPO}/tar.gz/refs/heads/main"
@@ -3345,7 +3345,7 @@ def render_update_center(*, fresh: bool = False):
 
     rows = [
         [InlineKeyboardButton("↻ Check releases", callback_data="system:refresh"), InlineKeyboardButton("⌘ Manage nodes", callback_data="system:nodes")],
-        [InlineKeyboardButton("◇ Repository", url="https://github.com/Azumi67/WG_Panel"), InlineKeyboardButton("✦ Releases", url="https://github.com/Azumi67/WG_Panel/releases")],
+        [InlineKeyboardButton("◇ Repository", url="https://github.com/vtajook/wireguard-dashboard"), InlineKeyboardButton("✦ Releases", url="https://github.com/vtajook/wireguard-dashboard/releases")],
     ]
     if not _update_busy(status):
         if available:

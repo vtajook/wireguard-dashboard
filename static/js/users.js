@@ -1,4 +1,5 @@
 (() => {
+  const WGP_SELECTED = new Set();
   function getCookie(name) {
     return (
       document.cookie
@@ -1840,6 +1841,7 @@
        data-used="${Number(totalBytes || 0)}">
 
     <div class="peer-main peer-main-nowrap">
+      <label class="wgp-select" title="Select peer"><input type="checkbox" class="wgp-select-cb" data-id="${pKey}" ${WGP_SELECTED.has(String(pKey)) ? "checked" : ""} aria-label="Select peer"></label>
       <span class="peer-index">${i + 1})</span>
 
       <div class="peer-identity-block peer-row-identity">
@@ -1953,6 +1955,7 @@
         <button type="button" class="peer-action-button" data-peer-action="enable" title="Enable peer" aria-label="Enable peer" data-id="${pKey}" ${pStatus === "online" ? "hidden" : ""}><i class="fas fa-play" aria-hidden="true"></i><span class="peer-action-label">Enable</span></button>
         <button type="button" class="peer-action-button" data-peer-action="disable" title="Disable peer" aria-label="Disable peer" data-id="${pKey}" ${pStatus === "online" ? "" : "hidden"}><i class="fas fa-ban" aria-hidden="true"></i><span class="peer-action-label">Disable</span></button>
         <button type="button" class="peer-action-button" data-peer-action="reset-data" title="Reset data" aria-label="Reset data" data-id="${pKey}"><i class="fas fa-tachometer-alt" aria-hidden="true"></i><span class="peer-action-label">Reset data</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="rotate" title="New link + new keys (old config stops working)" aria-label="Change link" data-id="${pKey}"><i class="fas fa-arrows-rotate" aria-hidden="true"></i><span class="peer-action-label">Change link</span></button>
         <button type="button" class="peer-action-button" data-peer-action="reset-timer" title="Reset timer" aria-label="Reset timer" data-id="${pKey}"><i class="fas fa-history" aria-hidden="true"></i><span class="peer-action-label">Reset timer</span></button>
         <button type="button" class="peer-action-button" data-peer-action="delete" title="Delete peer" aria-label="Delete peer" data-id="${pKey}"><i class="fas fa-trash" aria-hidden="true"></i><span class="peer-action-label">Delete</span></button>
       </div>
@@ -2085,6 +2088,7 @@
         "Reset timer",
         "Restart peer time allowance",
       ],
+      ["rotate", "fa-arrows-rotate", "Change link", "New link and keys; the old config stops working"],
       ["delete", "fa-trash", "Delete", "Permanently remove this peer"],
     ];
 
@@ -2961,8 +2965,11 @@
     const start = (pagination.page - 1) * pagination.pageSize,
       end = start + pagination.pageSize;
     filtered.forEach((c, idx) => {
-      c.style.display = idx >= start && idx < end ? "" : "none";
+      const vis = idx >= start && idx < end;
+      c.style.display = vis ? "" : "none";
+      if (vis) wgpFlushCard(c);
     });
+    wgpSyncBulkBar();
     cards.forEach((c) => {
       if (c.dataset._match === "0") c.style.display = "none";
     });
@@ -3325,7 +3332,13 @@
           if (!quiet || card.dataset.order == null || card.dataset.order === '') {
             card.dataset.order = String(i);
           }
-          updateCard(card, p, i);
+          if (quiet && card.style.display === "none") {
+            wgpUpdateCardData(card, p);
+            card._wgpPending = [p, i];
+          } else {
+            card._wgpPending = null;
+            updateCard(card, p, i);
+          }
           existing.delete(idStr);
         });
 
@@ -3340,9 +3353,10 @@
         if (pagination.page > total) pagination.page = total;
         const start = (pagination.page - 1) * pagination.pageSize;
         const end = start + pagination.pageSize;
-        filtered.forEach((card, idx) => { card.style.display = idx >= start && idx < end ? '' : 'none'; });
+        filtered.forEach((card, idx) => { const vis = idx >= start && idx < end; card.style.display = vis ? '' : 'none'; if (vis) wgpFlushCard(card); });
         cards.forEach(card => { if (card.dataset._match === '0') card.style.display = 'none'; });
         renderPager(total);
+        wgpSyncBulkBar();
         restorePeerScrollAnchor(container, scrollAnchor);
         requestAnimationFrame(() => requestAnimationFrame(() => {
           container.style.removeProperty('--peer-list-min-height');
@@ -5204,6 +5218,23 @@
         del.innerHTML = `<i class="fas fa-trash" aria-hidden="true"></i><span>Delete</span>`;
         del.disabled = false;
         del.title = `Delete interface ${iface.name}`;
+
+        let rsz = row.querySelector("#iface-resize-btn");
+        if (getScopeId()) {
+          rsz?.remove();
+        } else {
+          if (!rsz) {
+            rsz = document.createElement("button");
+            rsz.id = "iface-resize-btn";
+            rsz.className = "iface-action-btn";
+            rsz.type = "button";
+            row.insertBefore(rsz, del);
+          }
+          const cidr = String(iface.address || "").split(",")[0].trim();
+          rsz.innerHTML = `<i class="fas fa-up-right-and-down-left-from-center" aria-hidden="true"></i><span>Subnet ${cidr.includes("/") ? "/" + cidr.split("/")[1] : ""}</span>`;
+          rsz.title = `Change subnet size of ${iface.name} (${cidr})`;
+          rsz.disabled = false;
+        }
       }
     } else if (chip) {
       chip.style.display = "none";
@@ -5211,6 +5242,7 @@
       row?.classList.remove("iface-active-row");
       row?.querySelector("#iface-toggle-btn")?.remove();
       row?.querySelector("#iface-delete-btn")?.remove();
+      row?.querySelector("#iface-resize-btn")?.remove();
     }
 
     const createBtn = $("#create-peer-btn");
@@ -5467,7 +5499,9 @@
     if (!iface) return;
 
     const cntEl = bulkModal.querySelector("#bulk-available-ips");
-    const free = Array.isArray(iface.available_ips)
+    const free = (iface.available_count != null && Number.isFinite(Number(iface.available_count)))
+      ? Number(iface.available_count)
+      : Array.isArray(iface.available_ips)
       ? iface.available_ips.length
       : 0;
     if (cntEl) cntEl.textContent = String(free);
@@ -5516,7 +5550,9 @@
 
   async function refreshBulkDefaults(iface) {
     const countEl = $("#bulk-available-ips");
-    const count = Array.isArray(iface.available_ips)
+    const count = (iface.available_count != null && Number.isFinite(Number(iface.available_count)))
+      ? Number(iface.available_count)
+      : Array.isArray(iface.available_ips)
       ? iface.available_ips.length
       : 0;
     if (countEl) countEl.textContent = String(count);
@@ -5587,7 +5623,9 @@
     const iface = findIfaceById(SELECTED_IFACE_ID);
     if (!iface) return;
     const cntEl = bulkModal.querySelector("#bulk-available-ips");
-    const free = Array.isArray(iface.available_ips)
+    const free = (iface.available_count != null && Number.isFinite(Number(iface.available_count)))
+      ? Number(iface.available_count)
+      : Array.isArray(iface.available_ips)
       ? iface.available_ips.length
       : 0;
     if (cntEl) cntEl.textContent = String(free);
@@ -5623,7 +5661,9 @@
       return;
     }
 
-    const avail = Array.isArray(iface.available_ips)
+    const avail = (iface.available_count != null && Number.isFinite(Number(iface.available_count)))
+      ? Number(iface.available_count)
+      : Array.isArray(iface.available_ips)
       ? iface.available_ips.length
       : 0;
     const asked = Number(document.querySelector("#bulk-count")?.value || 0);
@@ -5856,6 +5896,225 @@
     }
   }
 
+
+  /* ===================== WGP additions: selection, bulk delete, lazy cards, subnet ===================== */
+
+  function wgpUpdateCardData(card, p) {
+    try {
+      card.dataset.status = connStatus(p);
+      card.dataset.panelStatus = panelStatus(p);
+      card.dataset.blocked = isBlocked(p) ? "1" : "0";
+      card.dataset.depleting = isDepleting(p) ? "1" : "0";
+      card.dataset.name = (p.name || "").toLowerCase();
+      card.dataset.phone = (p.phone_number || "").toLowerCase();
+      card.dataset.tg = (p.telegram_id || "").toLowerCase();
+      card.dataset.iface = p.iface || "";
+      card.dataset.address = String(p.address || "").toLowerCase();
+      card.dataset.expiry = String(Number(effectiveExpiryTs(p) || 0));
+      card.dataset.used = String(Number(usedBytes(p) || 0));
+    } catch (_) {}
+  }
+
+  function wgpFlushCard(card) {
+    const pending = card && card._wgpPending;
+    if (!pending) return;
+    card._wgpPending = null;
+    try { updateCard(card, pending[0], pending[1]); } catch (_) {}
+  }
+
+  function wgpEnsureStyles() {
+    if (document.getElementById("wgp-bulk-style")) return;
+    const st = document.createElement("style");
+    st.id = "wgp-bulk-style";
+    st.textContent = `
+      .wgp-select{display:inline-flex;align-items:center;justify-content:center;min-width:22px;margin-inline-end:6px;cursor:pointer}
+      .wgp-select input{width:17px;height:17px;cursor:pointer;accent-color:var(--accent,#5b8def)}
+      .wgp-bulkbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:8px 12px;border-radius:12px;border:1px solid var(--border,rgba(127,127,127,.25));background:var(--surface,rgba(127,127,127,.06))}
+      .wgp-bulkbar label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600}
+      .wgp-bulkbar .wgp-count{opacity:.8;font-size:.92em}
+      .wgp-bulkbar .wgp-spacer{flex:1}
+      .wgp-bulkbar button{padding:6px 12px;border-radius:9px;border:1px solid var(--border,rgba(127,127,127,.35));background:transparent;color:inherit;cursor:pointer}
+      .wgp-bulkbar button.danger{background:#d64545;border-color:#d64545;color:#fff}
+      .wgp-bulkbar button:disabled{opacity:.45;cursor:not-allowed}
+      .peer-card.wgp-selected{outline:2px solid var(--accent,#5b8def);outline-offset:-2px}
+    `;
+    document.head.appendChild(st);
+  }
+
+  function wgpMatchingCards() {
+    const cont = $(".peers-container");
+    if (!cont) return [];
+    return $$(".peer-card", cont).filter((c) => c.dataset._match !== "0" && matchPeer(c));
+  }
+
+  function wgpSyncBulkBar() {
+    const bar = document.getElementById("wgp-bulkbar");
+    if (!bar) return;
+    const cont = $(".peers-container");
+    const present = new Set(cont ? $$(".peer-card", cont).map((c) => String(c.dataset.id || "")) : []);
+    for (const id of Array.from(WGP_SELECTED)) if (!present.has(id)) WGP_SELECTED.delete(id);
+    const matching = wgpMatchingCards();
+    const allSel = matching.length > 0 && matching.every((c) => WGP_SELECTED.has(String(c.dataset.id || "")));
+    const all = bar.querySelector("#wgp-select-all");
+    if (all) {
+      all.checked = allSel;
+      all.indeterminate = !allSel && matching.some((c) => WGP_SELECTED.has(String(c.dataset.id || "")));
+    }
+    const lbl = bar.querySelector("#wgp-select-all-label");
+    if (lbl) lbl.textContent = `Select all in this filter (${matching.length})`;
+    const cnt = bar.querySelector(".wgp-count");
+    if (cnt) cnt.textContent = `${WGP_SELECTED.size} selected`;
+    const del = bar.querySelector("#wgp-bulk-delete");
+    if (del) del.disabled = WGP_SELECTED.size === 0 || !!getScopeId();
+    const clr = bar.querySelector("#wgp-bulk-clear");
+    if (clr) clr.disabled = WGP_SELECTED.size === 0;
+    if (cont) {
+      for (const c of $$(".peer-card", cont)) {
+        const on = WGP_SELECTED.has(String(c.dataset.id || ""));
+        c.classList.toggle("wgp-selected", on);
+        const cb = c.querySelector(".wgp-select-cb");
+        if (cb && cb.checked !== on) cb.checked = on;
+      }
+    }
+  }
+
+  async function wgpBulkDelete() {
+    if (!WGP_SELECTED.size) return;
+    if (getScopeId()) {
+      toastSafe("Bulk delete is available for local peers.", "warning");
+      return;
+    }
+    const ids = [];
+    for (const key of WGP_SELECTED) {
+      const peer = findPeer(key);
+      const n = Number(peer?.id ?? key);
+      if (Number.isFinite(n) && n > 0) ids.push(n);
+    }
+    if (!ids.length) return;
+    const ok = await (window.wgConfirm
+      ? window.wgConfirm({
+          title: "Delete selected peers",
+          body: `Permanently delete ${ids.length} peer${ids.length === 1 ? "" : "s"}? Their configs and links stop working. This cannot be undone.`,
+          okText: `Delete ${ids.length}`,
+        })
+      : Promise.resolve(confirm(`Delete ${ids.length} peers?`)));
+    if (!ok) return;
+    const btn = document.getElementById("wgp-bulk-delete");
+    if (btn) btn.disabled = true;
+    const loader = toastSafe(`Deleting ${ids.length} peers…`, "info", true);
+    try {
+      const r = await fetch("/api/peers/bulk_delete", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok && !j.deleted) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+      const failed = Array.isArray(j.failed) ? j.failed.length : 0;
+      WGP_SELECTED.clear();
+      toastSafe(
+        failed ? `Deleted ${j.deleted || 0}; ${failed} could not be deleted.` : `Deleted ${j.deleted || 0} peers.`,
+        failed ? "warning" : "success",
+      );
+      await refreshPeers?.({ abortPrev: true });
+      try { await refreshInterfacesUI({ force: true }); } catch (_) {}
+    } catch (err) {
+      toastSafe(`Bulk delete failed: ${err.message || err}`, "error");
+    } finally {
+      try { loader?.remove?.(); } catch (_) {}
+      wgpSyncBulkBar();
+    }
+  }
+
+  function wgpInitBulk(cont) {
+    if (!cont || cont.dataset.wgpBulk === "1") return;
+    cont.dataset.wgpBulk = "1";
+    wgpEnsureStyles();
+    const bar = document.createElement("div");
+    bar.id = "wgp-bulkbar";
+    bar.className = "wgp-bulkbar";
+    bar.innerHTML = `
+      <label><input type="checkbox" id="wgp-select-all"><span id="wgp-select-all-label">Select all in this filter</span></label>
+      <span class="wgp-count">0 selected</span>
+      <span class="wgp-spacer"></span>
+      <button type="button" id="wgp-bulk-clear" disabled>Clear</button>
+      <button type="button" id="wgp-bulk-delete" class="danger" disabled><i class="fas fa-trash"></i> Delete selected</button>`;
+    cont.before(bar);
+
+    bar.querySelector("#wgp-select-all").addEventListener("change", (e) => {
+      const on = e.target.checked;
+      for (const c of wgpMatchingCards()) {
+        const id = String(c.dataset.id || "");
+        if (on) WGP_SELECTED.add(id); else WGP_SELECTED.delete(id);
+      }
+      wgpSyncBulkBar();
+    });
+    bar.querySelector("#wgp-bulk-clear").addEventListener("click", () => {
+      WGP_SELECTED.clear();
+      wgpSyncBulkBar();
+    });
+    bar.querySelector("#wgp-bulk-delete").addEventListener("click", wgpBulkDelete);
+
+    cont.addEventListener("change", (e) => {
+      const cb = e.target.closest?.(".wgp-select-cb");
+      if (!cb) return;
+      e.stopPropagation();
+      const id = String(cb.dataset.id || cb.closest(".peer-card")?.dataset.id || "");
+      if (cb.checked) WGP_SELECTED.add(id); else WGP_SELECTED.delete(id);
+      wgpSyncBulkBar();
+    });
+    cont.addEventListener("click", (e) => {
+      if (e.target.closest?.(".wgp-select")) e.stopPropagation();
+    });
+    wgpSyncBulkBar();
+  }
+
+  async function wgpIfaceResize(e) {
+    const btn = e.target.closest?.("#iface-resize-btn");
+    if (!btn) return;
+    const iface = findIfaceById(SELECTED_IFACE_ID);
+    if (!iface || getScopeId()) return;
+    const cidr = String(iface.address || "").split(",")[0].trim();
+    const cur = cidr.includes("/") ? cidr.split("/")[1] : "24";
+    const val = await (window.wgConfirm
+      ? window.wgConfirm({
+          title: "Subnet prefix",
+          body: `Current: ${cidr}. Enter the new prefix (20 = 4094 IPs, 21 = 2046, 22 = 1022, 23 = 510). The server IP and all peers stay the same; the interface restarts once (a few seconds).`,
+          value: cur === "24" ? "20" : cur,
+          okText: "Apply",
+        })
+      : Promise.resolve(prompt("New prefix (e.g. 20)", "20")));
+    if (val == null || val === false || val === "") return;
+    const prefix = Number(String(val).replace("/", "").trim());
+    if (!Number.isInteger(prefix) || prefix < 16 || prefix > 30) {
+      toastSafe("Prefix must be a number between 16 and 30.", "error");
+      return;
+    }
+    btn.disabled = true;
+    const loader = toastSafe(`Changing ${iface.name} to /${prefix}…`, "info", true);
+    try {
+      const r = await fetch(`/api/iface/${encodeURIComponent(iface.id)}/resize`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ prefix }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+      toastSafe(
+        j.unchanged ? "Subnet already has that size." : `${iface.name} is now ${j.address} (${j.available_count ?? "?"} free IPs).`,
+        "success",
+      );
+      await refreshInterfacesUI({ force: true });
+    } catch (err) {
+      toastSafe(`Subnet change failed: ${err.message || err}`, "error");
+    } finally {
+      try { loader?.remove?.(); } catch (_) {}
+      btn.disabled = false;
+    }
+  }
+
   async function clickList(e) {
     const control = e.target.closest("button");
     if (!control) return;
@@ -5974,6 +6233,41 @@
     }
 
     if (action === "qr") return openQR(id);
+
+    if (action === "rotate") {
+      if (scopeId) {
+        toastSafe("Changing the link is only available for local peers.", "warning");
+        return;
+      }
+      const pp = findPeer(id);
+      const ok = await (window.wgConfirm
+        ? window.wgConfirm({
+            title: "Change user link",
+            body: `Create a new link and new keys for "${pp?.name || id}"? The old link and the old config will stop working. Name, data, used traffic and expiry stay the same.`,
+            okText: "Change link",
+          })
+        : Promise.resolve(confirm("Change link? The old link and config will stop working.")));
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        const r = await fetch(`/api/peer/${encodeURIComponent(id)}/rotate`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+        if (pp) pp.shortlink = j.shortlink || "";
+        try { await navigator.clipboard?.writeText?.(j.shortlink || ""); } catch (_) {}
+        toastSafe(`New link created${j.shortlink ? " and copied" : ""}. The old config no longer works.`, "success");
+        await refreshPeers?.({ abortPrev: true });
+      } catch (err) {
+        toastSafe(`Change link failed: ${err.message || err}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
 
     if (action === "enable") {
       const path = scopeId ? nodeFunc("enable") : localFunc("enable");
@@ -6565,7 +6859,7 @@
       if (nameEl && !nameEl.value) nameEl.value = `wg${nextIdx}`;
       if (portEl && !portEl.value) portEl.value = String(nextPort);
       if (addrEl && !addrEl.value)
-        addrEl.value = `10.${77 + Math.min(nextIdx, 100)}.0.1/24`;
+        addrEl.value = `10.${77 + Math.min(nextIdx, 100)}.0.1/20`;
       if (dnsEl && !dnsEl.value) dnsEl.value = "1.1.1.1, 1.0.0.1";
       if (mtuEl && !mtuEl.value) mtuEl.value = "";
 
@@ -6977,6 +7271,8 @@
       }
 
       attachOpen(peersCont);
+      wgpInitBulk(peersCont);
+      document.addEventListener("click", wgpIfaceResize);
     }
 
     refreshPeers();

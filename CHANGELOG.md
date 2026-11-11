@@ -68,5 +68,6 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - **Renewals fixed**: an expired customer renewed with the same plan length stayed blocked ("no change"); first-use services were renewed from their first connection instead of from now (10 days left + 30 bought = 20). Edit API accepts "renew": true; the bot sends it.
 - First use after a timer reset waits for a new connection (an old handshake from days ago used to start the timer immediately and the customer lost those days).
 - Regular (not first-use) services no longer restart their timer at the first connection (a service created 3 days before the customer connected got 3 free days).
+- Reset timer no longer turns an admin-disabled service back on.
 - Update Center keeps only the newest 10 code backups (they were never deleted).
 - Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.

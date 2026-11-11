@@ -23970,51 +23970,54 @@ def api_reset_timer(pid):
             _start_timer_cycle(p)
             detail = f'Timer restarted for {time_limit:g} days'
 
-        is_node_peer = (
-            getattr(iface, 'node_id', None) is not None
-            or ':' in str(getattr(iface, 'name', '') or '')
-        )
-
-        if is_node_peer:
-            node = db.session.get(
-                Node,
-                getattr(iface, 'node_id', None)
+        # A peer the ADMIN disabled stays disabled: resetting its timer used
+        # to put it back online. Auto-blocked peers are re-enabled as before.
+        admin_disabled = str(getattr(p, 'status', '') or '').lower() == 'offline'
+        if not admin_disabled:
+            is_node_peer = (
+                getattr(iface, 'node_id', None) is not None
+                or ':' in str(getattr(iface, 'name', '') or '')
             )
 
-            if not node:
-                return jsonify(
-                    success=False,
-                    error='node_not_found',
-                    detail='The node for this peer was not found.'
-                ), 404
-
-            node_post(
-                node,
-                f'/api/peer/{p.public_key}/enable',
-                {
-                    'host_cidr': _host_peer(p),
-                    'reset_timer': False,
-                    'reset_data': False,
-                    'preserve_usage': True,
-                },
-                timeout=15
-            )
-
-        else:
-            dev = iface_devname(iface)
-
-            if not _iface_up(dev):
-                _check_iface_up(iface)
-
-            if not _iface_up(dev):
-                raise RuntimeError(
-                    f"WireGuard interface '{dev}' is not running."
+            if is_node_peer:
+                node = db.session.get(
+                    Node,
+                    getattr(iface, 'node_id', None)
                 )
 
-            _wg_enable(p)
-            _sync_peer(p)
+                if not node:
+                    return jsonify(
+                        success=False,
+                        error='node_not_found',
+                        detail='The node for this peer was not found.'
+                    ), 404
 
-        p.status = 'online'
+                node_post(
+                    node,
+                    f'/api/peer/{p.public_key}/enable',
+                    {
+                        'host_cidr': _host_peer(p),
+                        'reset_timer': False,
+                        'reset_data': False,
+                        'preserve_usage': True,
+                    },
+                    timeout=15
+                )
+
+            else:
+                dev = iface_devname(iface)
+
+                if not _iface_up(dev):
+                    _check_iface_up(iface)
+
+                if not _iface_up(dev):
+                    raise RuntimeError(
+                        f"WireGuard interface '{dev}' is not running."
+                    )
+
+                _wg_enable(p)
+                _sync_peer(p)
+            p.status = 'online'
         p.bytes_offset = original_bytes_offset
         p.used_bytes_total = original_used_total
 

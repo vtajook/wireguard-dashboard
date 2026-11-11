@@ -15174,7 +15174,12 @@ def _expire():
                     _apply_subscription_timer(linked_subscription)
                     _sync_all_subscription_peers(linked_subscription, rename=False)
                 else:
-                    peer.timer_started_at = from_ts(hs)
+                    # Only first-use services start their clock here. A regular
+                    # service already runs from creation/renewal; restarting it
+                    # at the first connection gave free days (created 3 days
+                    # before connecting = 3 extra days).
+                    if getattr(peer, 'start_on_first_use', False) or not getattr(peer, 'timer_started_at', None):
+                        peer.timer_started_at = from_ts(hs)
 
                     if (
                         getattr(

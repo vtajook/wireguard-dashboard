@@ -258,6 +258,9 @@ def _peer_schema():
         statements.append('ALTER TABLE peer ADD COLUMN peer_endpoint VARCHAR(128)')
     if 'timer_started_at' not in peer_cols:
         statements.append('ALTER TABLE peer ADD COLUMN timer_started_at DATETIME')
+    for _col in ('shared_strikes', 'shared_last_at', 'shared_block_until'):
+        if _col not in peer_cols:
+            statements.append(f'ALTER TABLE peer ADD COLUMN {_col} INTEGER')
 
     if insp.has_table('subscription'):
         subscription_cols = {
@@ -12041,11 +12044,14 @@ def user_peer(token):
     if lim_bytes:
         used_eff = min(used_eff, lim_bytes)
 
-    if getattr(p, 'status', '') == 'blocked' and lim_bytes:
-        used_eff = lim_bytes
+    # (A blocked peer used to be shown as "all data used" even when it was
+    # blocked for time or for multi-device use; show the real numbers.)
 
     return jsonify({
     'name': p.name,
+    'multi_device_until': (
+        int(getattr(p, 'shared_block_until', 0) or 0) if _su_penalty_active(p) else None
+    ),
     'iface': p.iface.name,
     'address': p.address,
     'endpoint': _effective_client_endpoint(p),
@@ -15043,7 +15049,10 @@ def _enforce_warn(peer, reason):
 
 
 def _peer_over_limits(peer, used_bytes=None) -> bool:
-    """True when a standalone peer is expired or out of data."""
+    """True when a standalone peer is expired or out of data (or serving a
+    temporary single-user penalty)."""
+    if _su_penalty_active(peer):
+        return True
     if getattr(peer, 'unlimited', False):
         return False
     exp = _effective_expiry_ts(peer)
@@ -15605,6 +15614,294 @@ def _expire():
                     'event_key',
                 ),
             )
+
+# ---------------------------------------------------------------------------
+# Single-user enforcement
+# ---------------------------------------------------------------------------
+# WireGuard cannot limit devices, but one key can only have ONE endpoint at a
+# time: when two devices use the same config simultaneously, the peer's
+# endpoint keeps flipping between them (A, B, A, B ...). We sample
+# `wg show all endpoints` every few seconds and count "returns" to an endpoint
+# already seen in the window. Roaming (Wi-Fi <-> mobile) and NAT port changes
+# move to NEW endpoints and rarely come back quickly, so they don't trigger it.
+import collections as _su_collections
+
+SINGLE_USER_FILE = os.path.join(app.instance_path, 'single_user_settings.json')
+_SU_DEFAULTS = {
+    'enabled': True,
+    'action': 'block',            # 'block' = temporary disconnect, 'flag' = log only
+    'sample_sec': 5,
+    'window_sec': 300,
+    'min_returns': 6,             # back-and-forth switches inside the window
+    'penalties_min': [10, 30, 120, 720],
+    'forgive_hours': 24,
+    'exempt': [],                 # peer names or ids allowed on several devices
+}
+_SU_CACHE = {'ts': 0.0, 'data': None}
+_SU_HIST = {}
+_SU_HIST_LOCK = threading.Lock()
+_SU_THREAD_STARTED = False
+
+
+def _su_clean(d):
+    out = dict(_SU_DEFAULTS)
+    try:
+        out['enabled'] = bool(d.get('enabled', out['enabled']))
+        out['action'] = 'flag' if str(d.get('action', 'block')).lower() == 'flag' else 'block'
+        out['sample_sec'] = max(2, min(60, int(d.get('sample_sec', 5))))
+        out['window_sec'] = max(60, min(3600, int(d.get('window_sec', 300))))
+        out['min_returns'] = max(3, min(100, int(d.get('min_returns', 6))))
+        pen = d.get('penalties_min') or []
+        if isinstance(pen, str):
+            pen = [x for x in re.split(r'[\s,]+', pen) if x]
+        pen = [max(1, min(10080, int(x))) for x in pen][:10]
+        out['penalties_min'] = pen or list(_SU_DEFAULTS['penalties_min'])
+        out['forgive_hours'] = max(1, min(720, int(d.get('forgive_hours', 24))))
+        ex = d.get('exempt') or []
+        if isinstance(ex, str):
+            ex = [x for x in re.split(r'[\s,]+', ex) if x]
+        out['exempt'] = [str(x).strip() for x in ex if str(x).strip()][:500]
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
+def _su_settings(force=False):
+    now = time.time()
+    if not force and _SU_CACHE['data'] is not None and now - _SU_CACHE['ts'] < 10:
+        return _SU_CACHE['data']
+    data = dict(_SU_DEFAULTS)
+    try:
+        with open(SINGLE_USER_FILE, 'r', encoding='utf-8') as fh:
+            raw = json.load(fh) or {}
+        if isinstance(raw, dict):
+            for k in _SU_DEFAULTS:
+                if k in raw:
+                    data[k] = raw[k]
+    except FileNotFoundError:
+        pass
+    except Exception:
+        app.logger.warning('single_user_settings.json unreadable; using defaults', exc_info=True)
+    data = _su_clean(data)
+    _SU_CACHE.update(ts=now, data=data)
+    return data
+
+
+def _su_save(data):
+    cur = dict(_su_settings(force=True))
+    cur.update({k: v for k, v in (data or {}).items() if k in _SU_DEFAULTS})
+    clean = _su_clean(cur)
+    os.makedirs(app.instance_path, exist_ok=True)
+    tmp = SINGLE_USER_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(clean, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, SINGLE_USER_FILE)
+    _SU_CACHE.update(ts=0.0, data=None)
+    return clean
+
+
+def _su_penalty_active(peer) -> bool:
+    try:
+        until = int(getattr(peer, 'shared_block_until', 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return until > int(time.time())
+
+
+def _su_read_endpoints():
+    """{public_key: (iface, 'ip:port')} for peers that have an endpoint."""
+    out = {}
+    try:
+        r = subprocess.run(['wg', 'show', 'all', 'endpoints'],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            return None
+        for line in r.stdout.splitlines():
+            parts = line.split('\t')
+            if len(parts) < 3:
+                parts = line.split()
+            if len(parts) < 3:
+                continue
+            iface, pub, ep = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            if not ep or ep == '(none)':
+                continue
+            out[pub] = (iface, ep)
+    except Exception:
+        return None
+    return out
+
+
+def _su_returns(hist, now, window):
+    """Count switches back to an endpoint already seen inside the window.
+    hist: [(ts, endpoint)] recorded only when the endpoint changed; the first
+    entry may be older than the window (the endpoint active at its start)."""
+    seen, prev, returns = set(), None, 0
+    for ts, ep in hist:
+        in_window = (now - ts) <= window
+        if prev is not None and ep != prev and in_window and ep in seen:
+            returns += 1
+        seen.add(ep)
+        prev = ep
+    return returns, len(seen)
+
+
+def _su_tick(settings=None, now=None):
+    s = settings or _su_settings()
+    if not s['enabled']:
+        return []
+    eps = _su_read_endpoints()
+    if eps is None:
+        return []
+    now = time.time() if now is None else float(now)
+    window = s['window_sec']
+    suspects = []
+    with _SU_HIST_LOCK:
+        for pub, (iface, ep) in eps.items():
+            h = _SU_HIST.get(pub)
+            if h is None:
+                h = _SU_HIST[pub] = _su_collections.deque(maxlen=200)
+            if not h or h[-1][1] != ep:
+                h.append((now, ep))
+            while len(h) > 1 and (now - h[1][0]) > window:
+                h.popleft()
+            returns, distinct = _su_returns(h, now, window)
+            if returns >= s['min_returns'] and distinct >= 2:
+                recent = []
+                for _, e in reversed(h):
+                    if e not in recent:
+                        recent.append(e)
+                suspects.append((pub, iface, returns, recent[:4]))
+        for pub in list(_SU_HIST):
+            if pub not in eps:
+                _SU_HIST.pop(pub, None)
+    if suspects:
+        _su_act(suspects, s, now)
+    return suspects
+
+
+def _su_act(suspects, s, now):
+    got = _EXPIRY_LOCK.acquire(timeout=60)
+    try:
+        with app.app_context():
+            exempt = set(s.get('exempt') or [])
+            for pub, iface_name, returns, endpoints in suspects:
+                peer = Peer.query.filter_by(public_key=pub).first()
+                if peer is None or (peer.status or '') != 'online':
+                    continue
+                iface = getattr(peer, 'iface', None)
+                if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+                    continue
+                if str(peer.id) in exempt or (peer.name or '') in exempt:
+                    continue
+                strikes = int(peer.shared_strikes or 0)
+                last = int(peer.shared_last_at or 0)
+                if s['action'] != 'block' and last and (now - last) < s['window_sec']:
+                    # flag-only: one record per window, not one every few seconds
+                    with _SU_HIST_LOCK:
+                        _SU_HIST.pop(pub, None)
+                    continue
+                if now - last > s['forgive_hours'] * 3600:
+                    strikes = 0
+                strikes += 1
+                peer.shared_strikes = strikes
+                peer.shared_last_at = int(now)
+                ep_txt = ', '.join(endpoints)
+                if s['action'] == 'block':
+                    pen = s['penalties_min']
+                    mins = pen[min(strikes - 1, len(pen) - 1)]
+                    try:   # save traffic up to this moment before removing it
+                        _wg_dump_invalidate()
+                        _accumulate_peer_usage(peer, _wg_transfer(peer), persist=True)
+                    except Exception:
+                        pass
+                    peer.shared_block_until = int(now + mins * 60)
+                    _disable_peer(peer, 'multi_device_block', status='blocked')
+                    log_event(peer, 'multi_device',
+                              f'Same config used on several devices at once ({returns} switches; '
+                              f'endpoints: {ep_txt}). Disconnected for {mins} min (strike {strikes}).',
+                              commit=False)
+                else:
+                    log_event(peer, 'multi_device',
+                              f'Same config used on several devices at once ({returns} switches; '
+                              f'endpoints: {ep_txt}). Flag only (strike {strikes}).',
+                              commit=False)
+                with _SU_HIST_LOCK:
+                    _SU_HIST.pop(pub, None)
+            db.session.commit()
+            try:
+                _peers_cache_bump()
+            except Exception:
+                pass
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        app.logger.warning('single-user enforcement failed', exc_info=True)
+    finally:
+        if got:
+            _EXPIRY_LOCK.release()
+
+
+def _su_loop():
+    while True:
+        s = _su_settings()
+        try:
+            _su_tick(s)
+        except Exception:
+            app.logger.debug('single-user tick failed', exc_info=True)
+        time.sleep(s['sample_sec'])
+
+
+def _start_single_user_enforcer():
+    global _SU_THREAD_STARTED
+    if _SU_THREAD_STARTED:
+        return
+    _SU_THREAD_STARTED = True
+    threading.Thread(target=_su_loop, name='single-user-enforcer', daemon=True).start()
+
+
+@app.get('/api/single_user')
+@require_api_key_or_login
+def single_user_settings_get():
+    s = _su_settings(force=True)
+    now = int(time.time())
+    try:
+        penalized = Peer.query.filter(Peer.shared_block_until > now).count()
+        flagged = Peer.query.filter(Peer.shared_last_at > now - 86400).count()
+    except Exception:
+        penalized = flagged = 0
+    return jsonify(ok=True, settings=s, penalized_now=penalized, flagged_24h=flagged)
+
+
+@app.post('/api/single_user')
+@require_api_key_or_login
+def single_user_settings_post():
+    payload = request.get_json(silent=True) or {}
+    s = _su_save(payload)
+    try:
+        logpanel_action('single_user_settings', json.dumps(s, ensure_ascii=False)[:500])
+    except Exception:
+        pass
+    return jsonify(ok=True, settings=s)
+
+
+@app.post('/api/peer/<int:pid>/clear_multi_device')
+@require_api_key_or_login
+def peer_clear_multi_device(pid):
+    """Forgive a peer: clear strikes and lift a running penalty."""
+    p = db.session.get(Peer, pid) or abort(404)
+    p.shared_strikes = 0
+    p.shared_last_at = None
+    was_blocked = _su_penalty_active(p)
+    p.shared_block_until = None
+    reenabled = False
+    if was_blocked and (p.status or '') == 'blocked' and not _peer_over_limits(p):
+        reenabled = bool(_reenable_blocked_peer(p, note='Single-user penalty lifted by admin'))
+    db.session.commit()
+    log_event(p, 'multi_device_cleared', 'Single-user strikes cleared by admin')
+    return jsonify(ok=True, success=True, reenabled=reenabled, status=p.status)
+
 
 _EXPIRY_THREAD_STARTED = False
 _EXPIRY_LOCK = threading.Lock()
@@ -21391,6 +21688,13 @@ def panel_peers():
                 'subscription_name': getattr(subscription, 'name', '') or '',
                 'subscription_access': subscription_access_state or None,
 
+                'shared_strikes': int(getattr(peer, 'shared_strikes', 0) or 0),
+                'shared_last_at': int(getattr(peer, 'shared_last_at', 0) or 0) or None,
+                'shared_block_until': (
+                    int(getattr(peer, 'shared_block_until', 0) or 0)
+                    if _su_penalty_active(peer) else None
+                ),
+
                 'conn_status':
                     connection['conn_status'],
 
@@ -23624,6 +23928,9 @@ def iface_delete(iface_id):
 def api_enable(pid):
 
     p = db.session.get(Peer, pid) or abort(404)
+    # Admin override: enabling lifts a running single-user penalty.
+    if getattr(p, 'shared_block_until', None):
+        p.shared_block_until = None
     iface = getattr(p, 'iface', None)
 
     if not iface:
@@ -31617,6 +31924,7 @@ def subscription_public_inbound_geo(token, link_id):
 
 _start_retention()
 _start_expiry_enforcer()
+_start_single_user_enforcer()
 _start_backup_scheduler()
 _node_notify_monitor()
 # ========================================

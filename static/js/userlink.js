@@ -271,6 +271,38 @@
     const j = payload || {};
     setText('peer-name', j.name || '—');
     setStatus(j.status);
+    // single-user rule: the config was used on several devices at the same time
+    try {
+      const mdUntil = Number(j.multi_device_until || 0);
+      const mdLeft = mdUntil - Date.now() / 1000;
+      if (mdLeft > 0) {
+        const lbl = document.getElementById('peer-status-label');
+        if (lbl) lbl.textContent = `Paused · ${Math.max(1, Math.ceil(mdLeft / 60))} min`;
+        const pill = document.getElementById('peer-status');
+        if (pill) pill.title = 'This config was used on more than one device at the same time. Each config is for ONE device only. It reconnects automatically when the pause ends.';
+        let note = document.getElementById('wgp-multi-device-note');
+        if (!note && pill) {
+          note = document.createElement('div');
+          note.id = 'wgp-multi-device-note';
+          note.setAttribute('role', 'alert');
+          note.style.cssText = 'box-sizing:border-box;width:100%;margin:12px 0;padding:12px 14px;border-radius:14px;border:1px solid rgba(220,38,38,.35);background:rgba(254,226,226,.92);color:#991b1b;font-size:.92rem;line-height:1.6;overflow-wrap:anywhere;';
+          const card = pill.closest('section');
+          if (card) card.insertAdjacentElement('afterend', note);
+          else (pill.closest('main') || document.body).prepend(note);
+        }
+        if (note) {
+          const m = Math.max(1, Math.ceil(mdLeft / 60));
+          note.innerHTML = '';
+          const fa = document.createElement('div'); fa.dir = 'rtl'; fa.style.textAlign = 'right';
+          fa.textContent = `این کانفیگ همزمان روی بیش از یک دستگاه استفاده شده و ${m} دقیقه‌ی دیگر قطع است. هر کانفیگ فقط برای یک دستگاه است؛ بعد از پایان این زمان خودکار وصل می‌شود.`;
+          const en = document.createElement('div'); en.dir = 'ltr'; en.style.cssText = 'margin-top:6px;opacity:.85';
+          en.textContent = `This config was used on more than one device at the same time and is paused for ${m} more min. One config = one device. It reconnects automatically.`;
+          note.append(fa, en);
+        }
+      } else {
+        document.getElementById('wgp-multi-device-note')?.remove();
+      }
+    } catch (_) {}
     setText('peer-address', j.address || '—');
     setText('peer-endpoint', String(j.endpoint || '').trim() || '—');
     renderTags('allowed-ips-list', j.allowed_ips, 'Default route');

@@ -92,3 +92,16 @@ body.operations-page .ops2-resolution { max-width: 100%; box-sizing: border-box;
 
 /* create-peer button label was clipped next to its badge */
 #create-peer-btn { min-width: max-content; }
+
+/* single-user enforcement badge */
+.peer-tag.multi-device{border:1px solid rgba(217,119,6,.40) !important;background:rgba(245,158,11,.14) !important;color:#b45309 !important;cursor:pointer;}
+.peer-tag.multi-device.penalty{border-color:rgba(220,38,38,.40) !important;background:rgba(239,68,68,.13) !important;color:#b91c1c !important;}
+html[data-theme="dark"] .peer-tag.multi-device{color:#fbbf24 !important;}
+html[data-theme="dark"] .peer-tag.multi-device.penalty{color:#fca5a5 !important;}
+.wgp-su-dialog{max-width:560px;width:calc(100vw - 32px);max-height:calc(100vh - 32px);overflow:auto;}
+.wgp-su-form{display:flex;flex-direction:column;gap:10px;text-align:start;}
+.wgp-su-field{display:flex;flex-direction:column;gap:4px;font-size:.9rem;}
+.wgp-su-row{display:flex !important;flex-direction:row !important;align-items:center;justify-content:flex-start !important;gap:8px;font-weight:600;}
+.wgp-su-row input{width:auto !important;margin:0;}
+.wgp-su-help,.wgp-su-stats{font-size:.88rem;opacity:.85;margin:0;}
+#wgp-single-user-btn{width:auto;justify-self:start;}

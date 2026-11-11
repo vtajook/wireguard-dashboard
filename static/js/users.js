@@ -143,6 +143,12 @@
     return dataLow || timeLow;
   }
 
+  function isMultiDevice(p) {
+    const now = Date.now() / 1000;
+    return Number(p?.shared_block_until || 0) > now ||
+      (Number(p?.shared_last_at || 0) > 0 && now - Number(p.shared_last_at) < 86400);
+  }
+
   function peerTagsHTML(p) {
     const c = connStatus(p);
     const pStatus = panelStatus(p);
@@ -173,6 +179,27 @@
       tags.push(`
       <span class="peer-tag disabled" title="Panel state: disabled">
         <i class="fas ${statusIcon("disabled")}"></i> Disabled
+      </span>
+    `);
+    }
+
+    // single-user enforcement: same config on several devices at once
+    const suUntil = Number(p.shared_block_until || 0);
+    const suLast = Number(p.shared_last_at || 0);
+    const suNow = Date.now() / 1000;
+    if (suUntil > suNow) {
+      const mins = Math.max(1, Math.ceil((suUntil - suNow) / 60));
+      tags.push(`
+      <span class="peer-tag multi-device penalty" title="Used on several devices at the same time. Disconnected for ${mins} more min (strike ${Number(p.shared_strikes || 1)}).">
+        <i class="fas fa-users-slash" aria-hidden="true"></i>
+        <span>Multi-device · ${mins}m</span>
+      </span>
+    `);
+    } else if (suLast && suNow - suLast < 86400) {
+      tags.push(`
+      <span class="peer-tag multi-device" title="Seen on several devices at the same time in the last 24h (strike ${Number(p.shared_strikes || 1)}).">
+        <i class="fas fa-users" aria-hidden="true"></i>
+        <span>Multi-device ×${Number(p.shared_strikes || 1)}</span>
       </span>
     `);
     }
@@ -1839,6 +1866,7 @@
        data-panel-status="${pStatus}"
        data-blocked="${blocked ? "1" : "0"}"
        data-depleting="${depleted ? "1" : "0"}"
+       data-multi="${isMultiDevice(p) ? "1" : "0"}"
        data-name="${(p.name || "").toLowerCase()}"
        data-phone="${(p.phone_number || "").toLowerCase()}"
        data-tg="${(p.telegram_id || "").toLowerCase()}"
@@ -2420,6 +2448,7 @@
     card.dataset.panelStatus = pStatus;
     card.dataset.blocked = blocked ? "1" : "0";
     card.dataset.depleting = depleted ? "1" : "0";
+    card.dataset.multi = isMultiDevice(p) ? "1" : "0";
     card.dataset.name = (p.name || "").toLowerCase();
     card.dataset.phone = (p.phone_number || "").toLowerCase();
     card.dataset.tg = (p.telegram_id || "").toLowerCase();
@@ -2827,6 +2856,7 @@
           <option value="disabled">Disabled</option>
           <option value="depleting">Near limit</option>
           <option value="blocked">Blocked</option>
+          <option value="multi">Multi-device (24h)</option>
         </select>
 
         <select id="peer-filter-sort" class="input" aria-label="Sort peers">
@@ -2919,6 +2949,7 @@
       (st === "offline" && status === "offline") ||
       (st === "depleting" && card.dataset.depleting === "1") ||
       (st === "blocked" && card.dataset.blocked === "1") ||
+      (st === "multi" && card.dataset.multi === "1") ||
       (st === "enabled" && panel === "online") ||
       (st === "disabled" && panel !== "online");
 
@@ -3206,6 +3237,7 @@
     });
   }
 
+  window.wgpRefreshPeers = (o) => refreshPeers(o || {});
   async function refreshPeers(opts = {}) {
     try {
       await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve());
@@ -5946,6 +5978,7 @@
       card.dataset.panelStatus = panelStatus(p);
       card.dataset.blocked = isBlocked(p) ? "1" : "0";
       card.dataset.depleting = isDepleting(p) ? "1" : "0";
+      card.dataset.multi = isMultiDevice(p) ? "1" : "0";
       card.dataset.name = (p.name || "").toLowerCase();
       card.dataset.phone = (p.phone_number || "").toLowerCase();
       card.dataset.tg = (p.telegram_id || "").toLowerCase();

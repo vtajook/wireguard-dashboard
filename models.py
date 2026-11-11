@@ -62,6 +62,11 @@ class Peer(db.Model):
     phone_number         = db.Column(db.String(32))
     telegram_id          = db.Column(db.String(64))
 
+    # single-user enforcement (same config on several devices at once)
+    shared_strikes       = db.Column(db.Integer, default=0)
+    shared_last_at       = db.Column(db.Integer)      # unix ts of last detection
+    shared_block_until   = db.Column(db.Integer)      # unix ts; blocked until then
+
     events               = db.relationship('PeerEvent', backref='peer', lazy=True, cascade="all, delete-orphan")
     created_at = db.Column(
     db.DateTime,

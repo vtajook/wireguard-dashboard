@@ -72,3 +72,10 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Reset timer no longer turns an admin-disabled service back on.
 - Update Center keeps only the newest 10 code backups (they were never deleted).
 - Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.
+
+## Single-user enforcement (one device per config)
+- WireGuard cannot limit devices, but one key has only ONE endpoint at a time: when the same config is connected on two devices at once, its endpoint keeps switching between them. The panel reads `wg show all endpoints` every 5s and counts switches BACK to an endpoint already seen in the last 5 minutes. Roaming (Wi-Fi <-> mobile) and NAT port changes move to new endpoints and do not trigger it.
+- Action (configurable from the **Single-user** button on the Peers page): disconnect the config for 10, 30, 120, 720 minutes on the 1st, 2nd, 3rd, 4th+ offense (forgotten after 24h without a new one), or only mark it. Exempt list by name or id.
+- Users page: red "Multi-device · Nm" badge while disconnected, amber "Multi-device xN" for 24h, filter "Multi-device (24h)", click the badge to forgive and reconnect. Enable also lifts a penalty.
+- Customer page shows "Paused" and a Persian/English notice with the minutes left.
+- Traffic is saved before the disconnect; after the pause the peer reconnects automatically (unless it expired meanwhile). API: `GET/POST /api/single_user`, `POST /api/peer/<id>/clear_multi_device`, peer fields `shared_strikes`, `shared_last_at`, `shared_block_until`.

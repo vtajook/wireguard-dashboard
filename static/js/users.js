@@ -1260,8 +1260,17 @@
     }
     return `${Math.max(0, Math.round(mib))} MiB`;
   };
+  /* No data cap: the unlimited flag, OR a data limit of 0/empty (the bot
+     sells "unlimited volume" plans as time limit + data limit 0). Those used
+     to show "0 MiB left · 0 limit" and hid how much the user consumed. */
+  const noDataCap = (p) => {
+    if (!p) return false;
+    if (p.unlimited) return true;
+    const n = Number(p.data_limit);
+    return !(Number.isFinite(n) && n > 0);
+  };
   const fmtLimit = (p) => {
-    if (p.unlimited) return "Unlimited";
+    if (noDataCap(p)) return "Unlimited";
     if (
       p.data_limit !== null &&
       p.data_limit !== undefined &&
@@ -1283,7 +1292,7 @@
     );
   };
   const remainingMiB = (p) => {
-    if (p.unlimited) return Infinity;
+    if (noDataCap(p)) return Infinity;
 
     const limMiB = toMiB(p.data_limit, p.limit_unit);
 
@@ -1720,9 +1729,9 @@
     return `
     <div class="peer-more-bars" aria-label="Peer limits">
       <div class="peer-limit-bar">
-        <span>Data remaining</span>
-        <div class="bar"><i class="data-bar" style="width:${dataPct.toFixed(1)}%"></i></div>
-        <b>${dataPct.toFixed(0)}%</b>
+        <span>${noDataCap(p) ? "Data used" : "Data remaining"}</span>
+        <div class="bar"><i class="data-bar" style="width:${noDataCap(p) ? 100 : dataPct.toFixed(1)}%"></i></div>
+        <b>${noDataCap(p) ? fmtAmountMiB(usedBytes(p) / 1048576, "Mi") : `${dataPct.toFixed(0)}%`}</b>
       </div>
       <div class="peer-limit-bar time-progress">
         <span>Time remaining</span>
@@ -1743,7 +1752,8 @@
   function cardHTML(p, i) {
     const limitStr = fmtLimit(p);
     const usedStr = fmtAmountMiB(usedBytes(p) / 1048576, "Mi");
-    const remainStr = p.unlimited
+    const noCap = noDataCap(p);
+    const remainStr = noCap
       ? `${usedStr} used`
       : fmtAmountMiB(remainingMiB(p), p.limit_unit);
     const timerStr = timeBadge(p);
@@ -1791,7 +1801,7 @@
 
     const dataCapMiB = toMiB(p.data_limit, p.limit_unit);
     const dataRemainMiB = remainingMiB(p);
-    const dataRemainPct = p.unlimited
+    const dataRemainPct = noCap
       ? 100
       : Number.isFinite(dataCapMiB) && dataCapMiB > 0
         ? Math.max(0, Math.min(100, (dataRemainMiB / dataCapMiB) * 100))
@@ -1864,9 +1874,9 @@
       <div class="peer-usage-block peer-row-usage">
         <span class="peer-row-label">Usage &amp; expiry</span>
         <div class="peer-limit-head">
-          <div class="peer-data" title="${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
+          <div class="peer-data" title="${noCap ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
             <i class="fas fa-database"></i>
-            <span class="data-summary">${p.unlimited ? `${usedStr} used · No cap` : `${remainStr} left · ${limitStr} limit`}</span>
+            <span class="data-summary">${noCap ? `${usedStr} used · No cap` : `${remainStr} left · ${limitStr} limit`}</span>
           </div>
           <div class="peer-timer" title="${
             p.unlimited && activeSince !== "–"
@@ -1878,19 +1888,19 @@
           </div>
         </div>
         ${(() => {
-          const remainingPct = p.unlimited ? 100 : Math.max(0, Math.min(100, dataRemainPct));
-          const usedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - remainingPct));
-          const usageTone = p.unlimited
+          const remainingPct = noCap ? 100 : Math.max(0, Math.min(100, dataRemainPct));
+          const usedPct = noCap ? 0 : Math.max(0, Math.min(100, 100 - remainingPct));
+          const usageTone = noCap
             ? 'usage-unlimited'
             : remainingPct <= 10
               ? 'usage-danger'
               : remainingPct <= 25
                 ? 'usage-warning'
                 : 'usage-normal';
-          return `<div class="peer-usage-meter ${usageTone}" title="${p.unlimited ? 'Unlimited data remaining' : `${remainingPct.toFixed(0)}% remaining · ${usedPct.toFixed(0)}% used`}" data-remaining-pct="${remainingPct.toFixed(1)}">
+          return `<div class="peer-usage-meter ${usageTone}" title="${noCap ? `${usedStr} used · no data cap` : `${remainingPct.toFixed(0)}% remaining · ${usedPct.toFixed(0)}% used`}" data-remaining-pct="${remainingPct.toFixed(1)}">
             <span class="peer-usage-meter-label">Remaining</span>
             <span class="peer-usage-meter-track" role="progressbar" aria-label="Data remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${remainingPct.toFixed(0)}"><i style="width:${remainingPct.toFixed(1)}%"></i></span>
-            <em>${p.unlimited ? 'Unlimited' : `${remainingPct.toFixed(0)}%`}</em>
+            <em>${noCap ? 'No cap' : `${remainingPct.toFixed(0)}%`}</em>
           </div>`;
         })()}
       </div>
@@ -2454,30 +2464,35 @@
 
     const remMiB = remainingMiB(p);
     const currentUsedStr = fmtAmountMiB(usedBytes(p) / 1048576, "Mi");
-    const currentDataText = p.unlimited
+    const curNoCap = noDataCap(p);
+    const currentDataText = curNoCap
       ? `${currentUsedStr} used · No data cap`
       : `${fmtAmountMiB(remMiB, p.limit_unit)} left · ${fmtLimit(p)} limit`;
     set(".peer-data .data-summary", currentDataText);
     set(".peer-timer .timer-text", timeBadge(p));
     const currentCapMiB = toMiB(p.data_limit, p.limit_unit);
-    const currentRemainPct = p.unlimited
+    const currentRemainPct = curNoCap
       ? 100
       : Number.isFinite(currentCapMiB) && currentCapMiB > 0
         ? Math.max(0, Math.min(100, (remMiB / currentCapMiB) * 100))
         : 0;
-    const currentUsedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - currentRemainPct));
+    const currentUsedPct = curNoCap ? 0 : Math.max(0, Math.min(100, 100 - currentRemainPct));
     const usageMeter = card.querySelector('.peer-usage-meter');
     const usageTrack = card.querySelector('.peer-usage-meter-track');
     const usageFill = card.querySelector('.peer-usage-meter-track i');
     const usageText = card.querySelector('.peer-usage-meter em');
     if (usageMeter) {
       usageMeter.classList.remove('usage-unlimited', 'usage-danger', 'usage-warning', 'usage-empty', 'usage-normal');
-      usageMeter.classList.add(p.unlimited ? 'usage-unlimited' : currentUsedPct >= 90 ? 'usage-danger' : currentUsedPct >= 75 ? 'usage-warning' : currentUsedPct <= 0 ? 'usage-empty' : 'usage-normal');
+      // same meaning as the first render: the bar and number show what is LEFT
+      // (refresh used to flip it to "used %" under the "Remaining" label)
+      usageMeter.classList.add(curNoCap ? 'usage-unlimited' : currentRemainPct <= 10 ? 'usage-danger' : currentRemainPct <= 25 ? 'usage-warning' : 'usage-normal');
       usageMeter.dataset.usagePct = currentUsedPct.toFixed(1);
+      usageMeter.dataset.remainingPct = (curNoCap ? 100 : currentRemainPct).toFixed(1);
+      usageMeter.title = curNoCap ? `${currentUsedStr} used · no data cap` : `${currentRemainPct.toFixed(0)}% remaining · ${currentUsedPct.toFixed(0)}% used`;
     }
-    if (usageTrack) usageTrack.setAttribute('aria-valuenow', currentUsedPct.toFixed(0));
-    if (usageFill) usageFill.style.width = `${currentUsedPct.toFixed(1)}%`;
-    if (usageText) usageText.textContent = p.unlimited ? 'No cap' : `${currentUsedPct.toFixed(0)}%`;
+    if (usageTrack) usageTrack.setAttribute('aria-valuenow', (curNoCap ? 100 : currentRemainPct).toFixed(0));
+    if (usageFill) usageFill.style.width = `${(curNoCap ? 100 : currentRemainPct).toFixed(1)}%`;
+    if (usageText) usageText.textContent = curNoCap ? 'No cap' : `${currentRemainPct.toFixed(0)}%`;
 
     const en = card.querySelector('[data-peer-action="enable"]');
     const di = card.querySelector('[data-peer-action="disable"]');
@@ -2585,8 +2600,11 @@
         Number.isFinite(limitMiB) && limitMiB > 0
           ? Math.max(0, Math.min(100, (remainMiB / limitMiB) * 100))
           : 0;
-      if (dataBar) dataBar.style.width = `${pct.toFixed(1)}%`;
-      if (dataText) dataText.textContent = `${pct.toFixed(0)}%`;
+      const nc = noDataCap(p);
+      if (dataBar) dataBar.style.width = `${nc ? 100 : pct.toFixed(1)}%`;
+      if (dataText) dataText.textContent = nc ? fmtAmountMiB(usedBytes(p) / 1048576, "Mi") : `${pct.toFixed(0)}%`;
+      const dataLabel = card.querySelector(".peer-limit-bar:first-child span");
+      if (dataLabel) dataLabel.textContent = nc ? "Data used" : "Data remaining";
     }
 
     hover(card);
@@ -4049,11 +4067,12 @@
 
       const liveMiB = Math.round((Number(peer.used_bytes) || 0) / 1048576);
       const dbMiB = Math.round((Number(peer.used_bytes_db) || 0) / 1048576);
-      const totalMiB = dbMiB + Math.max(0, liveMiB);
+      // used_bytes and used_bytes_db are the same lifetime total (adding them doubled it)
+      const totalMiB = Math.max(dbMiB, liveMiB);
 
       const limit = peer ? fmtLimit(peer) : "–";
       const remain = peer
-        ? peer.unlimited
+        ? noDataCap(peer)
           ? "Unlimited"
           : fmtAmountMiB(remainingMiB(peer), peer.limit_unit)
         : "–";

@@ -299,14 +299,16 @@
     state.unlimited = unlimited;
     const usedBytes = Number(j.used_effective_bytes ?? j.used_bytes ?? j.used_bytes_db ?? 0) || 0;
     const limitBytes = unlimited ? Infinity : limitToBytes(j.data_limit ?? j.limit, j.limit_unit ?? j.unit);
-    const remaining = unlimited ? Infinity : Math.max(0, limitBytes - usedBytes);
-    const dataPct = unlimited ? 1 : limitBytes > 0 ? remaining / limitBytes : 0;
+    // data limit 0 / empty = no data cap (time-only plans)
+    const noCap = unlimited || !(limitBytes > 0);
+    const remaining = noCap ? Infinity : Math.max(0, limitBytes - usedBytes);
+    const dataPct = noCap ? 1 : limitBytes > 0 ? remaining / limitBytes : 0;
 
-    setText('data-left', unlimited ? 'Unlimited' : bytesToHuman(remaining));
+    setText('data-left', noCap ? 'Unlimited' : bytesToHuman(remaining));
     setText('data-used', `${bytesToHuman(usedBytes)} used`);
-    setText('data-limit', unlimited ? 'No data cap' : limitBytes > 0 ? `${bytesToHuman(limitBytes)} total` : 'No data allowance');
-    setText('data-pct', unlimited ? '∞' : `${Math.round(clamp(dataPct) * 100)}%`);
-    setMeter('data-bar', dataPct, unlimited ? 'infinite' : toneFor(dataPct));
+    setText('data-limit', noCap ? 'No data cap' : limitBytes > 0 ? `${bytesToHuman(limitBytes)} total` : 'No data allowance');
+    setText('data-pct', noCap ? '∞' : `${Math.round(clamp(dataPct) * 100)}%`);
+    setMeter('data-bar', dataPct, noCap ? 'infinite' : toneFor(dataPct));
 
     const expires = firstTs(j, ['expires_at_ts', 'expires_at']);
     let ttl = Number(j.ttl_seconds);

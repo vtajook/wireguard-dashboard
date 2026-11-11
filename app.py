@@ -10627,13 +10627,40 @@ def _wg_runtime_snapshot(iface_names):
 
     return transfers, handshakes
 
-def _accumulate_peer_usage(peer, live_total=None):
+def _accumulate_peer_usage(peer, live_total=None, persist=False):
     """
-    Persist Wireلuard traffic across server/interface/node reboots.
+    Persist WireGuard traffic across server/interface/node reboots.
+
+    persist=False (default) is READ-ONLY: it returns stored usage plus the
+    not-yet-saved part of the live counter and changes nothing. Only the
+    background enforcer and a few explicit actions (rotate, interface down)
+    pass persist=True.
+
+    Why: web workers answer from a WireGuard snapshot that can be 1-2s old
+    while the enforcer (another process) has already saved a newer offset.
+    The old snapshot is then *smaller* than the saved offset, which the code
+    took for a kernel counter reset and added the user's WHOLE counter again
+    on every page/bot request - usage grew by gigabytes per refresh.
 
     Returns:
         used_total_bytes, live_delta_bytes, changed
     """
+    if not persist:
+        try:
+            live = int((_wg_transfer(peer) if live_total is None else live_total) or 0)
+        except Exception:
+            live = 0
+        try:
+            offset = max(0, int(getattr(peer, 'bytes_offset', 0) or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            stored = max(0, int(getattr(peer, 'used_bytes_total', 0) or 0))
+        except (TypeError, ValueError):
+            stored = 0
+        pending = live - offset if live > offset else 0
+        return int(stored + pending), int(pending), False
+
     changed = False
 
     try:
@@ -15064,6 +15091,10 @@ def _auto_unblock_peer(peer, used_bytes=None) -> bool:
 # Expiry  + total usage
 # ______________________
 def _expire():
+    # Fresh WireGuard snapshot, read lazily AFTER the peers are loaded below:
+    # the counter is then never older than the saved offset, so a stale
+    # snapshot can't be mistaken for a counter reset (usage inflation).
+    _wg_dump_invalidate()
     now = now_ts()
     changed = False
 
@@ -15208,6 +15239,7 @@ def _expire():
             ) = _accumulate_peer_usage(
                 peer,
                 total_bytes,
+                persist=True,
             )
 
             if usage_changed:
@@ -15350,6 +15382,7 @@ def _expire():
                 _accumulate_peer_usage(
                     peer,
                     total_bytes,
+                    persist=True,
                 )
 
             disabled = _disable_peer(
@@ -18360,7 +18393,7 @@ def node_peers(nid):
                     tx_mib = 0.0
 
                 live_total = int((rx_mib + tx_mib) * 1024 * 1024)
-                used_total, _delta, usage_changed = _accumulate_peer_usage(p, live_total)
+                used_total, _delta, usage_changed = _accumulate_peer_usage(p, live_total, persist=True)  # remote node rows
                 if usage_changed:
                     dirty = True
                 used_live = used_total
@@ -22234,7 +22267,7 @@ def _flush_iface_usage(dev: str):
             if not v:
                 continue
             try:
-                _accumulate_peer_usage(p, int(v[1] or 0) + int(v[2] or 0))
+                _accumulate_peer_usage(p, int(v[1] or 0) + int(v[2] or 0), persist=True)
             except Exception:
                 continue
             changed = True
@@ -24822,7 +24855,8 @@ def _rotate_local_peer(peer):
     # Bank the traffic used so far under the old key.
     _wg_dump_invalidate()
     try:
-        _accumulate_peer_usage(peer, _wg_transfer(peer))
+        _wg_dump_invalidate()
+        _accumulate_peer_usage(peer, _wg_transfer(peer), persist=True)
     except Exception:
         pass
 

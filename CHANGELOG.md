@@ -63,4 +63,5 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Users page opens faster with thousands of peers.
 - Unlimited-volume users (data limit 0, sold by the bot as time-only plans) now show how much they used ("X used · No cap") on the users page and on the customer page; before they showed "0 MiB left · 0 limit" or "No data allowance".
 - Usage meter no longer flips from "remaining %" to "used %" after the first refresh; logs popup "Total usage" was doubled.
+- **Usage inflation fixed**: web pages and the bot read usage from a 1-2s old WireGuard snapshot; when the enforcer had already saved a newer offset, the old value looked like a counter reset and the WHOLE counter was added again on every request (users showed hundreds of GB or TB). Usage is now written only by the enforcer (fresh snapshot each cycle) and by explicit actions; all other reads are read-only.
 - Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.

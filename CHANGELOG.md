@@ -21,6 +21,8 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Mass expiry is much faster: conf edits no longer scan the whole file in
   Python per peer, and the `wg show all dump` cache is kept when peers are removed.
 - Re-enabled peers restart their traffic offset at 0.
+- Updater records the installed commit from the downloaded archive itself,
+  so "update available" keeps working when the GitHub API is rate-limited.
 
 ## 2026-11 — first release
 

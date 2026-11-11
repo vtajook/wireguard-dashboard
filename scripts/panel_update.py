@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
-import argparse, datetime as dt, json, os, shutil, subprocess, sys, tarfile, tempfile, time
+import argparse
+import re, datetime as dt, json, os, shutil, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -150,8 +151,20 @@ def download_repo(repo: str, target: str, dest: Path) -> dict:
                 with tarfile.open(dest, "r:gz") as archive:
                     if not archive.getmembers():
                         raise RuntimeError("Downloaded archive is empty.")
+                    # GitHub archives carry the exact commit in the pax header.
+                    # It always matches the downloaded code, even when the
+                    # commits API is rate-limited or a new commit lands meanwhile.
+                    archive_sha = str(
+                        (archive.pax_headers or {}).get("comment") or ""
+                    ).strip()
 
                 metadata = github_main_metadata(repo)
+                if re.fullmatch(r"[0-9a-fA-F]{40}", archive_sha or ""):
+                    if metadata.get("revision") != archive_sha:
+                        metadata["commit_date"] = ""
+                    metadata["revision"] = archive_sha
+                    metadata["revision_short"] = archive_sha[:8]
+                    metadata["url"] = f"https://github.com/{repo}/commit/{archive_sha}"
                 metadata["archive_url"] = url
                 return metadata
 

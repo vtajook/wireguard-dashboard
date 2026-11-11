@@ -54,3 +54,10 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Bulk delete with "select all in this filter". API: `POST /api/peers/bulk_delete` `{"ids": [...]}`.
 - Single-peer lookup: `GET /api/peers?name=<name>` or `?id=<id>`.
 - Responsive layout fixes for tablets / "desktop site" mode on phones (`static/css/responsive-fix.css`).
+
+## Bug-hunt round (Nov 11)
+- **Interface could be wiped under load**: the "is the interface up?" check ran a full `wg show <dev>` with a 1.5s timeout. On a busy server it timed out, the panel thought the interface was down and, while creating a peer, ran `ip link del` on the live interface (every user on it disconnected). Now uses a tiny `wg show <dev> public-key`, a slow answer counts as up, and an existing link is never deleted automatically.
+- Runtime key checks (`allowed-ips`) timeout raised from 2s to 10s (a timeout made blocked peers stay in the kernel, or a delete be reported as done when it was not).
+- Traffic is saved right before an interface goes down (resize / down / delete); before, the traffic since the last sample was lost.
+- Dashboard peer counters: Total fixed (was always 0), uses the shared WireGuard snapshot, Offline tooltip shows idle vs disabled.
+- Users page opens faster with thousands of peers.

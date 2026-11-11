@@ -11042,14 +11042,41 @@ def _unblackhole(host_cidr):
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def _iface_up(name: str) -> bool:
+    """True when the WireGuard device exists in the kernel.
+
+    The old check ran a full `wg show <dev>` (prints every peer) with a 1.5s
+    timeout. On a busy server with hundreds of peers that timed out, the
+    interface was reported DOWN and _check_iface_up() went on to
+    `ip link del` the live interface, dropping every connected user.
+    Now: tiny `wg show <dev> public-key`, and a slow answer counts as UP
+    (only a real "no such device" error means down)."""
+    if not name:
+        return False
     try:
-        subprocess.check_call(
-            ['wg', 'show', name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5
-        )
-        return True
+        rc = subprocess.run(
+            ['wg', 'show', name, 'public-key'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6.0
+        ).returncode
+        return rc == 0
+    except subprocess.TimeoutExpired:
+        return _link_exists(name) is not False
     except Exception:
         return False
+
+
+def _link_exists(name: str):
+    """True/False if the network link exists, None when unknown."""
+    if not name:
+        return False
+    try:
+        if os.path.isdir('/sys/class/net'):
+            if os.path.exists('/sys/class/net/' + name):
+                return True
+        r = subprocess.run(['ip', 'link', 'show', name],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=6.0)
+        return r.returncode == 0
+    except Exception:
+        return None
 
 #___________________________________________________#
 """
@@ -11139,8 +11166,14 @@ def _check_iface_up(iface: InterfaceConfig):
         rc
     )
 
-    rc0, out0 = _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
-    _iface_log(iid, f"$ ip link del dev {dev}\n{out0}".rstrip())
+    # Never delete a link that already exists: it may be the live interface
+    # carrying every connected peer (a slow `wg show` once looked like "down").
+    if _link_exists(dev) is not False:
+        rcu, outu = _run_capture(['ip', 'link', 'set', 'up', 'dev', dev], timeout=6.0)
+        _iface_log(iid, f"$ ip link set up dev {dev}\n{outu}".rstrip())
+        if _iface_up(dev):
+            return
+        raise RuntimeError(f"Interface {dev} exists but is not a working WireGuard device; not touching it automatically.")
 
     c = ['ip', 'link', 'add', 'dev', dev, 'type', 'wireguard']
     rc1, out1 = _run_capture(c, timeout=6.0)
@@ -12213,7 +12246,7 @@ def _wg_allowed_ips(iface):
     try:
         out = subprocess.check_output(
             ['wg', 'show', iface.name, 'allowed-ips'],
-            stderr=subprocess.DEVNULL, timeout=2.0
+            stderr=subprocess.DEVNULL, timeout=10.0
         ).decode()
         for line in out.splitlines():
             parts = line.split('\t', 1)
@@ -13482,7 +13515,7 @@ def _wg_peer_keys(dev: str) -> set:
     try:
         out = subprocess.check_output(
             ['wg', 'show', dev, 'allowed-ips'],
-            stderr=subprocess.DEVNULL, timeout=2.0
+            stderr=subprocess.DEVNULL, timeout=10.0
         ).decode()
     except Exception:
         return keys
@@ -18092,6 +18125,7 @@ def iface_updown(iid, action):
                 ),
             )
 
+        _flush_iface_usage(dev)
         proc = subprocess.run(
             [
                 'wg-quick',
@@ -18104,6 +18138,8 @@ def iface_updown(iid, action):
             timeout=20,
             check=False,
         )
+
+        _zero_iface_offsets_if_gone(dev)
 
         output = (
             proc.stdout
@@ -22155,7 +22191,74 @@ def get_interfaces():
 
     return jsonify({'interfaces': out})
 
+def _flush_iface_usage(dev: str):
+    """Save every peer's traffic on <dev> to the database right before the
+    interface goes down (resize / down / delete). The kernel counters restart
+    from zero afterwards; without this, traffic since the last enforcer
+    sample was lost (free data for customers) and bytes_offset stayed stale."""
+    try:
+        if not dev or ':' in dev:
+            return
+        _wg_dump_invalidate()
+        data = _wg_dump_all(max_age=0)
+        if data is None:
+            return
+        live = data.get(dev) or {}
+        iface = InterfaceConfig.query.filter_by(name=dev).first()
+        if iface is None:
+            return
+        changed = False
+        for p in Peer.query.filter_by(iface_id=iface.id).all():
+            v = live.get(p.public_key)
+            if not v:
+                continue
+            try:
+                _accumulate_peer_usage(p, int(v[1] or 0) + int(v[2] or 0))
+            except Exception:
+                continue
+            changed = True
+        if changed:
+            db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        try:
+            current_app.logger.warning('Could not flush usage for %s before down', dev, exc_info=True)
+        except Exception:
+            pass
+
+
+def _zero_iface_offsets_if_gone(dev: str):
+    """After the device is really gone its counters restart at zero, so the
+    saved offsets must too (only then: zeroing while the interface is still
+    up would count the whole kernel counter a second time)."""
+    try:
+        if not dev or ':' in dev or _link_exists(dev) is not False:
+            return
+        iface = InterfaceConfig.query.filter_by(name=dev).first()
+        if iface is None:
+            return
+        Peer.query.filter_by(iface_id=iface.id).update({Peer.bytes_offset: 0}, synchronize_session=False)
+        db.session.commit()
+        _wg_dump_invalidate()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
 def _iface_down(name: str):
+    _flush_iface_usage(name)
+    try:
+        _iface_down_raw(name)
+    finally:
+        _zero_iface_offsets_if_gone(name)
+
+
+def _iface_down_raw(name: str):
     try:
         subprocess.check_call(
             ['wg-quick', 'down', name],

@@ -13256,6 +13256,33 @@ def _reconcile_local_iface(iface, peers=None):
                     current_app.logger.warning('Could not enable peer %s on %s', p.id, dev)
 
     routes = []
+    # Drop stale blackholes inside this interface's subnets that no longer
+    # belong to a blocked/disabled peer (left behind by deleted peers).
+    try:
+        keep = set()
+        for p in inactive:
+            try:
+                keep.add(str(ipaddress.ip_interface(_host_peer(p)).ip))
+            except Exception:
+                pass
+        nets = _iface_networks(iface)
+        out = subprocess.run(['ip', 'route', 'show', 'type', 'blackhole'], capture_output=True,
+                             text=True, timeout=15, check=False).stdout
+        for line in out.splitlines():
+            tok = line.split()
+            if not tok:
+                continue
+            dest = tok[1] if tok[0] == 'blackhole' and len(tok) > 1 else tok[0]
+            try:
+                host = ipaddress.ip_interface(dest if '/' in dest else dest + '/32')
+            except ValueError:
+                continue
+            if host.network.prefixlen != host.max_prefixlen:
+                continue
+            if any(host.ip in n for n in nets) and str(host.ip) not in keep:
+                routes.append(f'route del blackhole {host.ip}/{host.max_prefixlen}')
+    except Exception:
+        current_app.logger.warning('Stale blackhole cleanup failed for %s', getattr(iface, 'name', '?'), exc_info=True)
     for p in inactive:
         try:
             routes.append(f'route replace blackhole {_host_peer(p)}')
@@ -13413,6 +13440,14 @@ def _remove_local_peer_runtime_and_config(peer: Peer):
         _remove_peer(peer)
     except Exception as e:
         raise PeerRemovalError('config', str(e), 500)
+
+    # _wg_disable() blackholes the address. The peer is being deleted, so the
+    # address will be reused: leaving the route made the next customer who
+    # got this IP unable to reach anything.
+    try:
+        _unblackhole(_host_peer(peer))
+    except Exception:
+        current_app.logger.warning('Could not remove blackhole for deleted peer %s', getattr(peer, 'id', '?'))
 
 
 def _remove_node_peer(peer: Peer):

@@ -21,6 +21,9 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Mass expiry is much faster: conf edits no longer scan the whole file in
   Python per peer, and the `wg show all dump` cache is kept when peers are removed.
 - Re-enabled peers restart their traffic offset at 0.
+- **Deleting a peer left a blackhole route on its IP**, so the next customer
+  who got that IP had no internet. Delete now removes it, and interface
+  startup removes stale blackholes left by older versions.
 - Updater records the installed commit from the downloaded archive itself,
   so "update available" keeps working when the GitHub API is rate-limited.
 

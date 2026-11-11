@@ -24190,6 +24190,21 @@ def api_edit(pid):
             None,
         )
 
+        # The panel's edit form shows only days + hours. A duration with
+        # minutes (bot renewals send exact days/hours/minutes) came back up to
+        # 59 minutes shorter, looked like a NEW duration and restarted the
+        # timer from now: renaming a customer 20 days into a renewal gave them
+        # 20 free days. Without minutes in the request, a value that is the
+        # stored one cut to whole hours is "unchanged".
+        if 'time_limit_minutes' not in data:
+            try:
+                old_days = float(getattr(p, 'time_limit_days', 0) or 0)
+                new_days = float(data.get('time_limit_days') or 0)
+            except (TypeError, ValueError):
+                old_days = new_days = 0.0
+            if old_days > 0 and new_days > 0 and 0 <= (old_days - new_days) < (1.0 / 24.0) - 1e-9:
+                data['time_limit_days'] = p.time_limit_days
+
     for field in (
         'name',
         'allowed_ips',

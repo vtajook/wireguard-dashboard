@@ -15143,6 +15143,27 @@ def _expire():
                 peer
             )
 
+            # Only a RECENT handshake is a first use. WireGuard keeps the last
+            # handshake time for as long as the peer stays in the kernel, so
+            # after a timer reset an old handshake (days ago) was taken as the
+            # "first use" and the customer lost those days before reconnecting.
+            # An active client re-handshakes every ~2 minutes.
+            if hs and hs > 0 and (now - int(hs)) > 600:
+                # Not recent. Still a genuine first use when the peer has never
+                # been used before (e.g. the panel was down when a brand-new
+                # customer connected); after a reset (an earlier first_use
+                # event exists) only a fresh handshake counts.
+                try:
+                    used_before = db.session.query(PeerEvent.id).filter(
+                        PeerEvent.peer_id == peer.id,
+                        PeerEvent.event == 'first_use',
+                    ).first() is not None
+                except Exception:
+                    used_before = True
+                created_ts = to_ts(getattr(peer, 'created_at', None)) or 0
+                if used_before or int(hs) < created_ts - 120:
+                    hs = 0
+
             if hs and hs > 0:
                 peer.first_used_at = from_ts(hs)
 

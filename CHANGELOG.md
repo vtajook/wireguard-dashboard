@@ -71,6 +71,7 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - Saving the edit form without touching the duration no longer restarts the timer of bot-renewed customers (the form drops minutes; renaming a customer 20 days into a renewal gave 20 free days).
 - Update Center shows the installed commit next to the version (v2.1.0 · abcd1234) so it can be compared with the latest commit; VERSION bumped to 2.1.0.
 - Resizing an interface while the bot creates users: creation waits for the resize, and the post-resize reconcile can no longer remove a user created in the same instant (it was dropped from WireGuard until the next restart); one creation used to fail with HTTP 500.
+- **Security (XSS)**: user names, phone numbers, Telegram IDs and event details were inserted into the users page as HTML; a name containing code ran in the admin browser (page load, edit, logs, more info, confirm dialogs). All are escaped now. Browser test covers every page and window that shows them.
 - Users page and dashboard now use the same "online" rule (connected within the last 3 minutes); the users page used 45 seconds, so connected users flickered and the two counts never matched.
 - Block, unblock, enable, edit and change-link take the same per-interface lock, so they cannot interleave with a reconcile or resize of that interface.
 - Restoring a database backup now restarts the panel automatically (the background enforcer and other workers kept using the old database file until a manual restart).

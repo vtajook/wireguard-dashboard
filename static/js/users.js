@@ -1867,12 +1867,12 @@
        data-blocked="${blocked ? "1" : "0"}"
        data-depleting="${depleted ? "1" : "0"}"
        data-multi="${isMultiDevice(p) ? "1" : "0"}"
-       data-name="${(p.name || "").toLowerCase()}"
-       data-phone="${(p.phone_number || "").toLowerCase()}"
-       data-tg="${(p.telegram_id || "").toLowerCase()}"
+       data-name="${peerEsc((p.name || "").toLowerCase())}"
+       data-phone="${peerEsc((p.phone_number || "").toLowerCase())}"
+       data-tg="${peerEsc((p.telegram_id || "").toLowerCase())}"
        data-address="${peerEsc((p.address || "").toLowerCase())}"
        data-endpoint="${peerEsc((epStr || "").toLowerCase())}"
-       data-iface="${p.iface || ""}"
+       data-iface="${peerEsc(p.iface || "")}"
        data-order="${i}"
        data-created="${createdSortTs}"
        data-expiry="${Number(expTs || 0)}"
@@ -1885,8 +1885,8 @@
       <div class="peer-identity-block peer-row-identity">
         <span class="peer-avatar ${avatar.tone}" aria-hidden="true">${peerEsc(avatar.letter)}</span>
         <div class="peer-identity-copy">
-          <span class="peer-name" title="${peerEsc(p.name || "")}">${p.name || ""}</span>
-          <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || "—"}</span>
+          <span class="peer-name" title="${peerEsc(p.name || "")}">${peerEsc(p.name || "")}</span>
+          <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${peerEsc(p.iface || "—")}</span>
         </div>
         <div class="peer-row-status">${peerTagsHTML(p)}</div>
       </div>
@@ -1936,10 +1936,10 @@
       <div class="peer-network-block peer-row-network">
         <span class="peer-row-label">Network</span>
         <div class="peer-address-line" title="${peerEsc(p.address || "")}">
-          <i class="fas fa-network-wired"></i><span class="address">${p.address || "—"}</span>
+          <i class="fas fa-network-wired"></i><span class="address">${peerEsc(p.address || "—")}</span>
         </div>
         <div class="endpoint-wrap"${epStr ? "" : ' style="display:none"'} title="${peerEsc(epStr)}">
-          <i class="fas fa-globe"></i><span class="endpoint">${epStr}</span>
+          <i class="fas fa-globe"></i><span class="endpoint">${peerEsc(epStr)}</span>
         </div>
       </div>
 
@@ -1976,9 +1976,9 @@
         ${peerDetailItem("mi-created", "calendar-plus", "Created", created)}
         ${peerDetailItem("mi-exp", "calendar-times", "Expires", exp)}
         ${peerDetailItem("mi-total", "exchange-alt", "Total usage", totalStr)}
-        ${peerDetailItem("mi-phone", "phone", "Phone", p.phone_number || "–")}
-        ${peerDetailItem("mi-tg", "paper-plane", "Telegram", p.telegram_id || "–")}
-        ${peerDetailItem("mi-iface", "network-wired", "Interface", `<span class="mi-iface-name">${p.iface || "–"}</span>`)}
+        ${peerDetailItem("mi-phone", "phone", "Phone", peerEsc(p.phone_number || "–"))}
+        ${peerDetailItem("mi-tg", "paper-plane", "Telegram", peerEsc(p.telegram_id || "–"))}
+        ${peerDetailItem("mi-iface", "network-wired", "Interface", `<span class="mi-iface-name">${peerEsc(p.iface || "–")}</span>`)}
       </div>
     </div>
 
@@ -2594,18 +2594,18 @@
     );
     setHTML(
       ".mi-phone",
-      peerDetailInner("phone", "Phone", p.phone_number || "–"),
+      peerDetailInner("phone", "Phone", peerEsc(p.phone_number || "–")),
     );
     setHTML(
       ".mi-tg",
-      peerDetailInner("paper-plane", "Telegram", p.telegram_id || "–"),
+      peerDetailInner("paper-plane", "Telegram", peerEsc(p.telegram_id || "–")),
     );
     setHTML(
       ".mi-iface",
       peerDetailInner(
         "network-wired",
         "Interface",
-        `<span class="mi-iface-name">${p.iface || "–"}</span>`,
+        `<span class="mi-iface-name">${peerEsc(p.iface || "–")}</span>`,
       ),
     );
 
@@ -3745,7 +3745,7 @@
     editForm.name && (editForm.name.value = p.name || "");
     const sel = editForm.querySelector('select[name="address"]');
     if (sel)
-      sel.innerHTML = `<option value="${p.address}">${p.address}</option>`;
+      sel.innerHTML = `<option value="${peerEsc(p.address)}">${peerEsc(p.address)}</option>`;
     editForm.allowed_ips &&
       (editForm.allowed_ips.value = p.allowed_ips || "0.0.0.0/0, ::/0");
     if (editForm.allowed_ips)
@@ -4146,11 +4146,11 @@
     const peer = findPeer(id) || {};
     const epStr = endpointDisplay(peer);
     $in("#logs-overview", logsModal).innerHTML = `
-    <div class="logs-pill"><i class="fas fa-user"></i><strong>Name:</strong>&nbsp;${peer.name ?? "–"}</div>
-    <div class="logs-pill"><i class="fas fa-network-wired"></i><strong>Address:</strong>&nbsp;${peer.address ?? "–"}</div>
-    <div class="logs-pill"><i class="fas fa-globe"></i><strong>Endpoint:</strong>&nbsp;${epStr || "–"}</div>
-    <div class="logs-pill"><i class="fas fa-shield-halved"></i><strong>Interface:</strong>&nbsp;${peer.iface ?? "–"}</div>
-    <div class="logs-pill"><i class="fas fa-clock"></i><strong>Status:</strong>&nbsp;${cap(peer.status ?? "–")}</div>
+    <div class="logs-pill"><i class="fas fa-user"></i><strong>Name:</strong>&nbsp;${peerEsc(peer.name ?? "–")}</div>
+    <div class="logs-pill"><i class="fas fa-network-wired"></i><strong>Address:</strong>&nbsp;${peerEsc(peer.address ?? "–")}</div>
+    <div class="logs-pill"><i class="fas fa-globe"></i><strong>Endpoint:</strong>&nbsp;${peerEsc(epStr || "–")}</div>
+    <div class="logs-pill"><i class="fas fa-shield-halved"></i><strong>Interface:</strong>&nbsp;${peerEsc(peer.iface ?? "–")}</div>
+    <div class="logs-pill"><i class="fas fa-clock"></i><strong>Status:</strong>&nbsp;${peerEsc(cap(peer.status ?? "–"))}</div>
   `;
 
     const logsFetchUrl = api(apiPeerPath(id, "/logs"));
@@ -4252,10 +4252,10 @@
                 <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap">${when}</td>
                 <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">
                   <span style="display:inline-flex;align-items:center;gap:.45rem;font-weight:600;">
-                    <i class="fas ${ic}"></i>${l.event.replace(/_/g, " ")}
+                    <i class="fas ${ic}"></i>${peerEsc(String(l.event || "").replace(/_/g, " "))}
                   </span>
                 </td>
-                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">${formatEventDetails(l.details).replace(/\n/g, "<br>")}</td>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">${peerEsc(formatEventDetails(l.details)).replace(/\n/g, "<br>")}</td>
                 <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap;color:#64748b">${whenRel}</td>
               </tr>`;
             })

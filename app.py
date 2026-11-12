@@ -31444,10 +31444,8 @@ def _subscription_access_or_403(sub):
 
 
 def _subscription_public_payload(sub) -> dict:
-    try:
-        _expire()
-    except Exception:
-        pass
+    # (Used to run a full enforcement pass on every public request, in the
+    # worker and without the enforcer lock. The background enforcer does it.)
 
     links = sorted(list(getattr(sub, 'links', []) or []), key=lambda x: (x.sort_order or 0, x.id or 0))
     limit_bytes = sub.limit_bytes() if hasattr(sub, 'limit_bytes') else None

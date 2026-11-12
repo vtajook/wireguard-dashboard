@@ -16658,13 +16658,16 @@ def _peer_conn_status(
             handshake_window = int(
                 os.environ.get(
                     'WG_ONLINE_HANDSHAKE_WINDOW',
-                    '45',
+                    # Same window as the dashboard counters: WireGuard only
+                    # re-handshakes about every 2 minutes, so 45s made connected
+                    # users flicker Online/Offline and never matched the dashboard.
+                    '180',
                 )
             )
         else:
             handshake_window = int(handshake_window)
     except (TypeError, ValueError):
-        handshake_window = 45
+        handshake_window = 180
 
     handshake_window = max(5, handshake_window)
 

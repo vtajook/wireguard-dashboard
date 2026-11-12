@@ -69,6 +69,7 @@ Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.
 - First use after a timer reset waits for a new connection (an old handshake from days ago used to start the timer immediately and the customer lost those days).
 - Regular (not first-use) services no longer restart their timer at the first connection (a service created 3 days before the customer connected got 3 free days).
 - Saving the edit form without touching the duration no longer restarts the timer of bot-renewed customers (the form drops minutes; renaming a customer 20 days into a renewal gave 20 free days).
+- Restoring a database backup now restarts the panel automatically (the background enforcer and other workers kept using the old database file until a manual restart).
 - Reset timer no longer turns an admin-disabled service back on.
 - Update Center keeps only the newest 10 code backups (they were never deleted).
 - Database indexes added at startup (peer events, public key, name, status, admin log): peer deletes and log views no longer scan the whole event table.

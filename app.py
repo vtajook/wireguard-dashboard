@@ -6708,6 +6708,35 @@ def _backup_prefs_save(p):
     _json_save(BACKUP_PREFS_FILE, cur)
     return cur
 
+def _schedule_panel_restart(delay_sec: int = 2) -> str:
+    """Restart the panel service a moment later, outside this process, so the
+    current HTTP response is delivered first. Returns how it was scheduled."""
+    svc = os.getenv("PANEL_SERVICE_NAME", "wg-panel.service")
+    docker_mode = str(os.getenv("DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes", "on"} or Path("/.dockerenv").exists()
+    if docker_mode:
+        def _later():
+            time.sleep(max(1, delay_sec))
+            os.kill(os.getpid(), signal.SIGTERM)
+        threading.Thread(target=_later, name="panel-restart", daemon=True).start()
+        return "docker"
+    runner = shutil.which("systemd-run")
+    if runner:
+        try:
+            r = subprocess.run(
+                [runner, "--unit", f"wg-panel-restart-{int(time.time())}-{os.getpid()}", "--collect", "--quiet",
+                 f"--on-active={max(1, delay_sec)}s", "--property=Type=oneshot", "--", "systemctl", "restart", svc],
+                capture_output=True, text=True, timeout=20,
+            )
+            if r.returncode == 0:
+                return "systemd-run"
+        except Exception:
+            pass
+    subprocess.Popen(["sh", "-c", f"sleep {max(1, delay_sec)}; systemctl restart {shlex.quote(svc)}"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True, close_fds=True)
+    return "subprocess"
+
+
 def _backup_restore_impl():
     import tempfile
     import zipfile
@@ -7090,8 +7119,21 @@ def _backup_restore_impl():
             except Exception:
                 pass
 
+            # The background enforcer and the other workers still hold the
+            # OLD database file open; without a restart they keep reading and
+            # writing it (renewals, usage, blocks) while the panel shows the
+            # restored one. Restart automatically after a DB restore.
+            restart_scheduled = None
+            if restored.get("db") or restored.get("wg"):
+                try:
+                    restart_scheduled = _schedule_panel_restart(2)
+                except Exception as e:
+                    warnings.append(f"auto_restart_failed:{e}")
+
             return jsonify(
                 ok=True,
+                restarting=bool(restart_scheduled),
+                restart_method=restart_scheduled,
                 kind=kind,
                 server_settings_mode=server_settings_mode,
                 detected={
@@ -7103,7 +7145,7 @@ def _backup_restore_impl():
                 restored=restored,
                 warnings=warnings,
                 node_restore_results=node_restore_results,
-                message="Restore completed. Restart may be required."
+                message=("Restore completed. The panel restarts in a few seconds." if restart_scheduled else "Restore completed. Restart may be required.")
             )
 
         finally:

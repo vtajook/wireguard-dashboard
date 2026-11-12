@@ -12885,8 +12885,19 @@ _ALLOC_LOCK_DIR = os.path.join(app.instance_path, 'locks')
 
 @contextmanager
 def interface_allocation_lock(iface):
- 
+    """Cross-process per-interface lock (peer creation, resize, reconcile).
+    Re-entrant within a thread."""
     name = re.sub(r'[^A-Za-z0-9_.:-]+', '_', str(getattr(iface, 'name', '') or 'iface'))
+    depth = getattr(_ALLOC_LOCK_STATE, 'depth', None)
+    if depth is None:
+        depth = _ALLOC_LOCK_STATE.depth = {}
+    if depth.get(name):
+        depth[name] += 1
+        try:
+            yield
+        finally:
+            depth[name] -= 1
+        return
     handle = None
     try:
         os.makedirs(_ALLOC_LOCK_DIR, exist_ok=True)
@@ -12896,15 +12907,20 @@ def interface_allocation_lock(iface):
         current_app.logger.warning('Could not take allocation lock for %s', name, exc_info=True)
         handle = None
 
+    depth[name] = 1
     try:
         yield
     finally:
+        depth[name] = 0
         if handle is not None:
             try:
                 fcntl.flock(handle, fcntl.LOCK_UN)
             except Exception:
                 pass
             handle.close()
+
+
+_ALLOC_LOCK_STATE = threading.local()
 
 
 def _available_ips(iface, limit=MAX_ENUMERATED_HOSTS):
@@ -13296,6 +13312,21 @@ def _remove_peers_from_conf_locked(conf_path, keys):
 
 
 def _reconcile_local_iface(iface, peers=None):
+    """Locked wrapper: no peer may be created/changed on this interface while
+    the conf snapshot is taken and applied with `wg syncconf` (a peer added in
+    between was removed from WireGuard again). The peer list is read inside
+    the lock for the same reason."""
+    if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+        return
+    conf_path = getattr(iface, 'path', None)
+    with interface_allocation_lock(iface):
+        if conf_path:
+            with _conf_file_lock(conf_path):
+                return _reconcile_local_iface_locked(iface, None)
+        return _reconcile_local_iface_locked(iface, None)
+
+
+def _reconcile_local_iface_locked(iface, peers=None):
     """Make the .conf file, the live runtime and blackhole routes match the
     database for one local interface, using a handful of processes instead of
     several per peer. Active peers are in conf+runtime, disabled/blocked peers
@@ -25212,45 +25243,51 @@ def api_iface_resize(iid):
     if not conf_path or not os.path.isfile(conf_path):
         return jsonify(ok=False, error='conf_missing', detail=f'Config file not found: {conf_path}'), 500
 
-    with open(conf_path, 'r', encoding='utf-8', errors='ignore') as fh:
-        old_text = fh.read()
-    new_text = _resize_conf_text(old_text, old_if, new_if)
+    # Hold the interface's allocation lock (peer creation) and the .conf lock
+    # (enforcer/edit/delete) for the whole read -> down -> rewrite -> up.
+    # Otherwise a peer created meanwhile was written to the old text (lost)
+    # or added while the interface was down (missing from WireGuard), and
+    # its own interface-up attempt collided with ours (HTTP 500).
+    with interface_allocation_lock(iface), _conf_file_lock(conf_path):
+            with open(conf_path, 'r', encoding='utf-8', errors='ignore') as fh:
+                old_text = fh.read()
+            new_text = _resize_conf_text(old_text, old_if, new_if)
 
-    old_fields = (iface.address, iface.post_up, iface.post_down)
-    dev = iface_devname(iface)
-    was_up = _iface_up(dev)
+            old_fields = (iface.address, iface.post_up, iface.post_down)
+            dev = iface_devname(iface)
+            was_up = _iface_up(dev)
 
-    try:
-        if was_up:
-            _iface_down(dev)
-        _write_conf_atomic(conf_path, _norm_conftext(new_text))
-        iface.address = _resize_hook_text(iface.address, old_if, new_if) if str(old_if) in (iface.address or '') else str(new_if)
-        iface.post_up = _resize_hook_text(iface.post_up, old_if, new_if)
-        iface.post_down = _resize_hook_text(iface.post_down, old_if, new_if)
-        db.session.flush()
-        if was_up:
-            _check_iface_up(iface)
-            if not _iface_up(dev):
-                raise RuntimeError(f'{dev} did not come back up')
-        db.session.commit()
-    except Exception as exc:
-        db.session.rollback()
-        try:
-            iface = db.session.get(InterfaceConfig, iid)
-            iface.address, iface.post_up, iface.post_down = old_fields
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        try:
-            if _iface_up(dev):
-                _iface_down(dev)
-            _write_conf_atomic(conf_path, old_text)
-            if was_up:
-                _check_iface_up(iface)
-        except Exception:
-            current_app.logger.exception('Resize rollback failed for %s', dev)
-        current_app.logger.exception('Interface resize failed for %s', dev)
-        return jsonify(ok=False, error='resize_failed', detail=str(exc)), 500
+            try:
+                if was_up:
+                    _iface_down(dev)
+                _write_conf_atomic(conf_path, _norm_conftext(new_text))
+                iface.address = _resize_hook_text(iface.address, old_if, new_if) if str(old_if) in (iface.address or '') else str(new_if)
+                iface.post_up = _resize_hook_text(iface.post_up, old_if, new_if)
+                iface.post_down = _resize_hook_text(iface.post_down, old_if, new_if)
+                db.session.flush()
+                if was_up:
+                    _check_iface_up(iface)
+                    if not _iface_up(dev):
+                        raise RuntimeError(f'{dev} did not come back up')
+                db.session.commit()
+            except Exception as exc:
+                db.session.rollback()
+                try:
+                    iface = db.session.get(InterfaceConfig, iid)
+                    iface.address, iface.post_up, iface.post_down = old_fields
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                try:
+                    if _iface_up(dev):
+                        _iface_down(dev)
+                    _write_conf_atomic(conf_path, old_text)
+                    if was_up:
+                        _check_iface_up(iface)
+                except Exception:
+                    current_app.logger.exception('Resize rollback failed for %s', dev)
+                current_app.logger.exception('Interface resize failed for %s', dev)
+                return jsonify(ok=False, error='resize_failed', detail=str(exc)), 500
 
     try:
         if was_up:

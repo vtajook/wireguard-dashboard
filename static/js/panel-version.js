@@ -334,7 +334,9 @@
     const latestRevision = shortRevision(payload, 'latest');
 
     if (currentElement) {
-      currentElement.textContent = current ? `v${current}` : '—';
+      currentElement.textContent = current
+        ? `v${current}${currentRevision ? ` · ${currentRevision}` : ''}`
+        : (currentRevision || '—');
     }
 
     if (latestElement) {

@@ -909,9 +909,16 @@
   function renderLocalVersion(version) {
     state.localVersion = version || {};
 
+    const currentRevision = String(
+      version?.current_revision_short
+      || version?.current_revision
+      || ''
+    ).slice(0, 8);
+    // The VERSION number only changes on releases; the commit shows exactly
+    // which code is installed, so it is compared with the latest commit.
     const current = version?.current
-      ? `v${String(version.current).replace(/^v/i, '')}`
-      : '—';
+      ? `v${String(version.current).replace(/^v/i, '')}${currentRevision ? ` · ${currentRevision}` : ''}`
+      : (currentRevision || '—');
 
     const latestRevision = String(
       version?.latest_revision_short

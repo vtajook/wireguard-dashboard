@@ -10966,6 +10966,21 @@ def _wireguard_runtime_endpoint(value: str) -> str:
         port,
     )
 
+def _peer_iface_locked(fn):
+    """Run a runtime+conf change of one peer under its interface lock, so it
+    cannot interleave with a reconcile (conf snapshot + wg syncconf) or a
+    resize of the same interface. Re-entrant; node peers are not locked."""
+    @wraps(fn)
+    def wrapper(peer, *a, **kw):
+        iface = getattr(peer, 'iface', None)
+        if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (getattr(iface, 'name', '') or ''):
+            return fn(peer, *a, **kw)
+        with interface_allocation_lock(iface):
+            return fn(peer, *a, **kw)
+    return wrapper
+
+
+@_peer_iface_locked
 def _wg_enable(peer):
 
     dev = iface_devname(peer.iface)
@@ -11028,6 +11043,7 @@ def _wg_enable(peer):
     _unblackhole(host_cidr)
     _wg_dump_invalidate()
 
+@_peer_iface_locked
 def _wg_disable(peer):
     dev = iface_devname(peer.iface)
     host_cidr = _host_peer(peer)
@@ -13243,6 +13259,7 @@ def _remove_peer_locked_slow(peer: Peer, conf_path):
         raise RuntimeError(f'Peer block is still present in {conf_path}.')
 
 
+@_peer_iface_locked
 def _sync_peer(peer: Peer):
     _remove_peer(peer)
     _peer_to_conf(peer)
@@ -25317,6 +25334,7 @@ def _new_wg_keypair():
     return priv, pub
 
 
+@_peer_iface_locked
 def _rotate_local_peer(peer):
     iface = peer.iface
     dev = iface_devname(iface)

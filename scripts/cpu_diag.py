@@ -190,7 +190,12 @@ raw = sh('iptables -t raw -S 2>/dev/null')
 rules = sh('iptables-save 2>/dev/null | grep -c "^-A"')
 print('  iptables rules:', rules or '?')
 if ports and raw is not None:
-    notracked = [p for p in ports if re.search(rf'--dport {p}\b.*NOTRACK|--dport {p}\b.*-j CT --notrack', raw)]
+    covered = set()
+    for m in re.finditer(r'--dport (\d+)(?::(\d+))?\b[^\n]*(?:NOTRACK|--notrack)', raw):
+        lo = int(m.group(1)); hi = int(m.group(2) or lo)
+        covered.update(str(x) for x in range(lo, hi + 1))
+    notracked = [p for p in ports if p in covered]
+    print('  conntrack skipped for WG ports:', ', '.join(notracked) or 'none')
     if len(notracked) < len(ports):
         hints.append("The encrypted WireGuard packets (UDP ports " + ', '.join(ports) + ") go through connection "
                      "tracking for no reason. Skipping it saves CPU on busy servers. Ask before applying: it needs a "

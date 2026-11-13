@@ -20605,11 +20605,72 @@ def node_iface_logs(nid, name):
     return jsonify(logs=(data.get('logs', []) if isinstance(data, dict) else []))
 
 
+_CPU_SAMPLE_FILE = '/dev/shm/wg-panel-cpu.json' if os.path.isdir('/dev/shm') else os.path.join(app.instance_path, '.cpu-sample.json')
+
+
+def _read_proc_stat_cpu():
+    with open('/proc/stat', 'r') as fh:
+        parts = fh.readline().split()
+    vals = [int(x) for x in parts[1:]]
+    idle = vals[3] + (vals[4] if len(vals) > 4 else 0)        # idle + iowait
+    total = sum(vals[:8]) if len(vals) >= 8 else sum(vals)    # without guest
+    return total, idle
+
+
+def _system_cpu_percent() -> float:
+    """CPU % since the previous sample, shared by ALL gunicorn workers.
+
+    psutil.cpu_percent(interval=None) measures since the previous call in the
+    SAME process; dashboard polls land on different workers, so a worker that
+    had not been called for a while (or was just called) returned 0.0 and the
+    chart kept dropping to zero."""
+    try:
+        total, idle = _read_proc_stat_cpu()
+    except Exception:
+        try:
+            return float(psutil.cpu_percent(interval=0.2) or 0.0)
+        except Exception:
+            return 0.0
+    now = time.time()
+    prev = None
+    try:
+        with open(_CPU_SAMPLE_FILE, 'r') as fh:
+            prev = json.load(fh)
+    except Exception:
+        prev = None
+    if prev and (now - float(prev.get('ts', 0))) < 1.0 and prev.get('pct') is not None:
+        return float(prev['pct'])           # sampled moments ago by another request
+    pct = None
+    if prev:
+        dt_total = total - int(prev.get('total', 0))
+        dt_idle = idle - int(prev.get('idle', 0))
+        if dt_total > 0 and (now - float(prev.get('ts', 0))) < 120:
+            pct = max(0.0, min(100.0, 100.0 * (dt_total - dt_idle) / dt_total))
+    if pct is None:
+        # no usable previous sample: measure over a short window
+        time.sleep(0.25)
+        try:
+            t2, i2 = _read_proc_stat_cpu()
+            dt_total, dt_idle = t2 - total, i2 - idle
+            pct = max(0.0, min(100.0, 100.0 * (dt_total - dt_idle) / dt_total)) if dt_total > 0 else 0.0
+            total, idle, now = t2, i2, time.time()
+        except Exception:
+            pct = 0.0
+    try:
+        tmp = f'{_CPU_SAMPLE_FILE}.{os.getpid()}.tmp'
+        with open(tmp, 'w') as fh:
+            json.dump({'ts': now, 'total': total, 'idle': idle, 'pct': round(pct, 1)}, fh)
+        os.replace(tmp, _CPU_SAMPLE_FILE)
+    except Exception:
+        pass
+    return round(pct, 1)
+
+
 @app.route('/api/stats')
 @login_required
 def api_stats():
     # ___ CPU ___
-    cpu_pct = psutil.cpu_percent(interval=None)
+    cpu_pct = _system_cpu_percent()
     cores   = psutil.cpu_count(logical=False) or psutil.cpu_count()
     threads = psutil.cpu_count(logical=True)
     try:

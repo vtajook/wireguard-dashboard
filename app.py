@@ -16024,6 +16024,323 @@ def peer_clear_multi_device(pid):
     return jsonify(ok=True, success=True, reenabled=reenabled, status=p.status)
 
 
+# ---------------------------------------------------------------------------
+# Automatic network tuning for busy WireGuard servers
+# ---------------------------------------------------------------------------
+# Applied at panel start and re-checked every 10 minutes (master process):
+#   rps     - single-queue NICs (typical VPS virtio_net) hand every received
+#             packet to ONE core; RPS spreads that work over all cores.
+#   gro     - rx-udp-gro-forwarding lets the kernel handle UDP in batches.
+#   notrack - the encrypted WireGuard packets (UDP listen ports) skip
+#             connection tracking. Only when the INPUT firewall is not strict
+#             (policy ACCEPT and no DROP/REJECT/state rules), otherwise the
+#             untracked packets could be dropped.
+# Every step only acts when the current value is the kernel default, so values
+# an admin set by hand are left alone. Rules the panel adds are tagged with the
+# comment "wg-panel-notrack" and are removed again when notrack is turned off.
+NET_TUNING_FILE = os.path.join(app.instance_path, 'network_tuning.json')
+_NT_DEFAULTS = {'enabled': True, 'rps': True, 'gro': True, 'notrack': True}
+_NT_SYSFS = '/sys/class/net'
+_NT_TAG = 'wg-panel-notrack'
+_NT_LAST = {'ts': None, 'actions': [], 'skipped': [], 'errors': []}
+_NT_LOCK = threading.Lock()
+_NT_THREAD_STARTED = False
+
+
+def _nt_settings():
+    data = dict(_NT_DEFAULTS)
+    try:
+        with open(NET_TUNING_FILE, 'r', encoding='utf-8') as fh:
+            raw = json.load(fh) or {}
+        for k in _NT_DEFAULTS:
+            if k in raw:
+                data[k] = bool(raw[k])
+    except FileNotFoundError:
+        pass
+    except Exception:
+        app.logger.warning('network_tuning.json unreadable; using defaults', exc_info=True)
+    if str(os.getenv('WG_NET_TUNING', '')).strip().lower() in ('0', 'false', 'off', 'no'):
+        data['enabled'] = False
+    return data
+
+
+def _nt_save(payload):
+    cur = _nt_settings()
+    for k in _NT_DEFAULTS:
+        if k in (payload or {}):
+            cur[k] = bool(payload[k])
+    os.makedirs(app.instance_path, exist_ok=True)
+    tmp = NET_TUNING_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(cur, fh, indent=2)
+    os.replace(tmp, NET_TUNING_FILE)
+    return cur
+
+
+def _nt_run(cmd, timeout=10):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or '') + (r.stderr or '')
+    except FileNotFoundError:
+        return 127, 'not found'
+    except Exception as exc:
+        return 1, str(exc)
+
+
+def _nt_read(path):
+    try:
+        with open(path, 'r') as fh:
+            return fh.read().strip()
+    except Exception:
+        return None
+
+
+def _nt_write(path, value):
+    with open(path, 'w') as fh:
+        fh.write(str(value))
+
+
+def _nt_default_dev():
+    rc, out = _nt_run(['ip', 'route', 'get', '1.1.1.1'])
+    m = re.search(r'\bdev\s+(\S+)', out or '') if rc == 0 else None
+    return m.group(1) if m else None
+
+
+def _nt_wg_ports():
+    ports = set()
+    try:
+        for i in InterfaceConfig.query.all():
+            if getattr(i, 'node_id', None) is not None:
+                continue
+            try:
+                p = int(getattr(i, 'listen_port', 0) or 0)
+            except (TypeError, ValueError):
+                p = 0
+            if 0 < p < 65536:
+                ports.add(p)
+    except Exception:
+        pass
+    rc, out = _nt_run(['wg', 'show', 'all', 'listen-port'])
+    if rc == 0:
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[-1].isdigit():
+                ports.add(int(parts[-1]))
+    return sorted(ports)
+
+
+def _nt_apply_rps(dev, res):
+    qdir = os.path.join(_NT_SYSFS, dev, 'queues')
+    try:
+        rxq = sorted(q for q in os.listdir(qdir) if q.startswith('rx-'))
+    except Exception:
+        res['skipped'].append(f'rps: no queue info for {dev}')
+        return
+    ncpu = os.cpu_count() or 1
+    if ncpu < 2:
+        res['skipped'].append('rps: single CPU')
+        return
+    if len(rxq) >= ncpu:
+        res['skipped'].append(f'rps: {dev} already has {len(rxq)} hardware queues')
+        return
+    mask = format((1 << ncpu) - 1, 'x')
+    changed = False
+    for q in rxq:
+        path = os.path.join(qdir, q, 'rps_cpus')
+        cur = _nt_read(path)
+        if cur is None:
+            continue
+        if re.fullmatch(r'[0,]*', cur):
+            try:
+                _nt_write(path, mask)
+                changed = True
+            except Exception as exc:
+                res['errors'].append(f'rps {dev}/{q}: {exc}')
+                return
+        fpath = os.path.join(qdir, q, 'rps_flow_cnt')
+        if (_nt_read(fpath) or '0') == '0':
+            try:
+                _nt_write(fpath, max(4096, 32768 // max(1, len(rxq))))
+            except Exception:
+                pass
+    sock = '/proc/sys/net/core/rps_sock_flow_entries'
+    if (_nt_read(sock) or '0') == '0':
+        try:
+            _nt_write(sock, 32768)
+        except Exception:
+            pass
+    if changed:
+        res['actions'].append(f'rps: spread {dev} receive work over {ncpu} CPUs (mask {mask})')
+
+
+def _nt_apply_gro(dev, res):
+    rc, out = _nt_run(['ethtool', '-k', dev])
+    if rc != 0:
+        res['skipped'].append('gro: ethtool not available' if rc == 127 else f'gro: cannot read {dev} features')
+        return
+    m = re.search(r'^rx-udp-gro-forwarding:\s*(\S+)(.*)$', out, re.M)
+    if not m:
+        res['skipped'].append(f'gro: {dev} does not support rx-udp-gro-forwarding')
+        return
+    if m.group(1) == 'on':
+        return
+    if 'fixed' in (m.group(2) or ''):
+        res['skipped'].append(f'gro: fixed off on {dev}')
+        return
+    rc, out = _nt_run(['ethtool', '-K', dev, 'rx-udp-gro-forwarding', 'on', 'rx-gro-list', 'off'])
+    if rc == 0:
+        res['actions'].append(f'gro: rx-udp-gro-forwarding on for {dev}')
+    else:
+        res['errors'].append(f'gro: {out.strip()[:120]}')
+
+
+def _nt_input_is_strict():
+    rc, out = _nt_run(['iptables', '-S', 'INPUT'])
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if line.startswith('-P INPUT') and not line.strip().endswith('ACCEPT'):
+            return True
+        if line.startswith('-A INPUT') and re.search(r'-j (DROP|REJECT)\b|--ctstate|--state|-j \S+', line):
+            if re.search(r'-j (ACCEPT|RETURN)\s*$', line) and not re.search(r'--ctstate|--state', line):
+                continue
+            return True
+    return False
+
+
+def _nt_notrack_rules():
+    """[(chain, spec_list)] of rules tagged by the panel, plus covered ports."""
+    rc, out = _nt_run(['iptables', '-t', 'raw', '-S'])
+    if rc != 0:
+        return None, set(), set()
+    tagged = []
+    in_cov, out_cov = set(), set()
+    for line in out.splitlines():
+        if 'NOTRACK' not in line and '--notrack' not in line:
+            continue
+        m = re.search(r'--dport (\d+)(?::(\d+))?', line)
+        if m and line.startswith('-A PREROUTING'):
+            in_cov.update(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1))
+        m = re.search(r'--sport (\d+)(?::(\d+))?', line)
+        if m and line.startswith('-A OUTPUT'):
+            out_cov.update(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1))
+        if _NT_TAG in line:
+            tagged.append(line)
+    return tagged, in_cov, out_cov
+
+
+def _nt_apply_notrack(enable, res):
+    tagged, in_cov, out_cov = _nt_notrack_rules()
+    if tagged is None:
+        res['skipped'].append('notrack: iptables raw table not available')
+        return
+    ports = set(_nt_wg_ports()) if enable else set()
+    # remove panel rules for ports that are gone (or everything when disabled)
+    for line in tagged:
+        m = re.search(r'--[ds]port (\d+)', line)
+        port = int(m.group(1)) if m else None
+        if port in ports:
+            continue
+        spec = shlex.split(line)[1:]           # drop "-A"
+        chain, rest = spec[0], spec[1:]
+        rc, out = _nt_run(['iptables', '-t', 'raw', '-D', chain] + rest)
+        if rc == 0:
+            res['actions'].append(f'notrack: removed panel rule ({chain} port {port})')
+            in_cov.discard(port)
+            out_cov.discard(port)
+    if not enable or not ports:
+        return
+    strict = _nt_input_is_strict()
+    if strict is None:
+        res['skipped'].append('notrack: cannot read the INPUT firewall')
+        return
+    if strict:
+        res['skipped'].append('notrack: INPUT firewall is strict (policy/state rules); left conntrack on to avoid dropping WireGuard')
+        return
+    for p in sorted(ports):
+        if p not in in_cov:
+            rc, out = _nt_run(['iptables', '-t', 'raw', '-A', 'PREROUTING', '-p', 'udp', '--dport', str(p),
+                               '-m', 'comment', '--comment', _NT_TAG, '-j', 'NOTRACK'])
+            if rc == 0:
+                res['actions'].append(f'notrack: incoming UDP {p}')
+            else:
+                res['errors'].append(f'notrack in {p}: {out.strip()[:120]}')
+        if p not in out_cov:
+            rc, out = _nt_run(['iptables', '-t', 'raw', '-A', 'OUTPUT', '-p', 'udp', '--sport', str(p),
+                               '-m', 'comment', '--comment', _NT_TAG, '-j', 'NOTRACK'])
+            if rc == 0:
+                res['actions'].append(f'notrack: outgoing UDP {p}')
+            else:
+                res['errors'].append(f'notrack out {p}: {out.strip()[:120]}')
+
+
+def _apply_network_tuning(reason='auto'):
+    res = {'ts': int(time.time()), 'reason': reason, 'actions': [], 'skipped': [], 'errors': []}
+    with _NT_LOCK:
+        s = _nt_settings()
+        docker_mode = str(os.getenv('DOCKER_MODE') or '').strip().lower() in {'1', 'true', 'yes', 'on'} or os.path.exists('/.dockerenv')
+        if docker_mode:
+            res['skipped'].append('docker: host network settings are managed outside the container')
+        elif not s['enabled']:
+            res['skipped'].append('disabled')
+            try:
+                with app.app_context():
+                    _nt_apply_notrack(False, res)
+            except Exception:
+                pass
+        else:
+            dev = _nt_default_dev()
+            if not dev:
+                res['skipped'].append('no default network device')
+            else:
+                if s['rps']:
+                    _nt_apply_rps(dev, res)
+                if s['gro']:
+                    _nt_apply_gro(dev, res)
+            try:
+                with app.app_context():
+                    _nt_apply_notrack(bool(s['notrack']), res)
+            except Exception as exc:
+                res['errors'].append(f'notrack: {exc}')
+        _NT_LAST.clear()
+        _NT_LAST.update(res)
+    if res['actions'] or res['errors']:
+        app.logger.info('network tuning (%s): actions=%s errors=%s', reason, res['actions'], res['errors'])
+    return res
+
+
+def _nt_loop():
+    time.sleep(20)
+    while True:
+        try:
+            _apply_network_tuning('auto')
+        except Exception:
+            app.logger.debug('network tuning failed', exc_info=True)
+        time.sleep(600)
+
+
+def _start_network_tuning():
+    global _NT_THREAD_STARTED
+    if _NT_THREAD_STARTED:
+        return
+    _NT_THREAD_STARTED = True
+    threading.Thread(target=_nt_loop, name='network-tuning', daemon=True).start()
+
+
+@app.get('/api/network_tuning')
+@require_api_key_or_login
+def network_tuning_get():
+    return jsonify(ok=True, settings=_nt_settings(), last=dict(_NT_LAST))
+
+
+@app.post('/api/network_tuning')
+@require_api_key_or_login
+def network_tuning_post():
+    s = _nt_save(request.get_json(silent=True) or {})
+    res = _apply_network_tuning('manual')
+    return jsonify(ok=True, settings=s, last=res)
+
+
 _EXPIRY_THREAD_STARTED = False
 _EXPIRY_LOCK = threading.Lock()
 _EXPIRY_LAST_TS = 0.0
@@ -32115,6 +32432,7 @@ def subscription_public_inbound_geo(token, link_id):
 _start_retention()
 _start_expiry_enforcer()
 _start_single_user_enforcer()
+_start_network_tuning()
 _start_backup_scheduler()
 _node_notify_monitor()
 # ========================================

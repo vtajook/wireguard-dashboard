@@ -571,8 +571,39 @@ csrf = CSRFProtect(app)
 def _csrf_protect_ui():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if request.path.startswith("/api/"):
-            return
+            return _api_same_origin_guard()
         csrf.protect()
+
+
+def _api_same_origin_guard():
+    """/api/* writes authenticated by the login COOKIE must come from the
+    panel's own pages. Without this, a page on another origin of the same site
+    (e.g. a hacked shop.<domain>) could make the admin's browser disable,
+    delete or rotate peers. Callers with an API key (the bot) are unaffected."""
+    if (request.headers.get('X-API-KEY') or '').strip() or (request.headers.get('Authorization') or '').strip():
+        return None
+    sfs = (request.headers.get('Sec-Fetch-Site') or '').strip().lower()
+    if sfs:
+        if sfs in ('same-origin', 'none'):
+            return None
+        return jsonify(error='cross_origin_blocked', detail='Request did not come from the panel itself.'), 403
+    origin = (request.headers.get('Origin') or '').strip()
+    if not origin:
+        return None            # old browser / non-browser client without Origin
+    if origin == 'null':
+        return jsonify(error='cross_origin_blocked'), 403
+    try:
+        from urllib.parse import urlsplit
+        o_host = (urlsplit(origin).netloc or '').lower()
+    except Exception:
+        o_host = ''
+    allowed = {(request.host or '').lower()}
+    for h in (request.headers.get('X-Forwarded-Host') or '').split(','):
+        if h.strip():
+            allowed.add(h.strip().lower())
+    if o_host and (o_host in allowed or o_host.split(':')[0] in {a.split(':')[0] for a in allowed}):
+        return None
+    return jsonify(error='cross_origin_blocked', detail='Request did not come from the panel itself.'), 403
 
 
 app.config.update(

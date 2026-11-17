@@ -41,14 +41,14 @@
       .map((r) => {
         const low = r.price_per_month > 0 && r.balance < r.price_per_month;
         return `<tr>
-          <td><div class="rs-name">${esc(r.username)}</div><div class="rs-sub">${esc(ifaceNames(r.iface_ids))}${r.note ? " · " + esc(r.note) : ""}</div></td>
-          <td>${r.enabled ? '<span class="rs-badge ok">Active</span>' : '<span class="rs-badge bad">Disabled</span>'}</td>
-          <td class="r">${num(r.balance)}${low ? ' <span class="rs-badge warn">low</span>' : ""}</td>
-          <td class="r">${num(r.price_per_month)}</td>
-          <td class="r">${num(r.users)}${r.max_users ? " / " + num(r.max_users) : ""}<div class="rs-sub">${num(r.users_online_status)} active</div></td>
-          <td class="r">${num(r.spent_30d)}</td>
-          <td><span class="rs-sub">${when(r.last_login_at)}</span></td>
-          <td><div class="acts">
+          <td data-label="Reseller"><div class="rs-name">${esc(r.username)}</div><div class="rs-sub">${esc(ifaceNames(r.iface_ids))}${r.note ? " · " + esc(r.note) : ""}</div></td>
+          <td data-label="Status">${r.enabled ? '<span class="rs-badge ok">Active</span>' : '<span class="rs-badge bad">Disabled</span>'}</td>
+          <td class="r" data-label="Wallet">${num(r.balance)}${low ? ' <span class="rs-badge warn">low</span>' : ""}</td>
+          <td class="r" data-label="Price / month">${num(r.price_per_month)}</td>
+          <td class="r" data-label="Users">${num(r.users)}${r.max_users ? " / " + num(r.max_users) : ""}<div class="rs-sub">${num(r.users_online_status)} active</div></td>
+          <td class="r" data-label="Spent 30d">${num(r.spent_30d)}</td>
+          <td data-label="Last login"><span class="rs-sub">${when(r.last_login_at)}</span></td>
+          <td class="rs-acts-cell"><div class="acts">
             <button class="rs-btn sm primary" data-act="charge" data-id="${r.id}"><i class="fas fa-wallet"></i> Charge</button>
             <button class="rs-btn sm" data-act="peers" data-id="${r.id}">Users</button>
             <button class="rs-btn sm" data-act="txns" data-id="${r.id}">Ledger</button>

@@ -9021,6 +9021,15 @@ def _record_backup(kind: str, when_ts: int | None = None):
     _json_save(BACKUP_LAST_FILE, last)
 
 
+_BACKUP_HOURLY_STEPS = {'hourly': 1, 'every2h': 2, 'every3h': 3, 'every6h': 6, 'every12h': 12}
+
+
+def _backup_hourly_step(freq) -> int:
+    """1/2/3/6/12 for the hourly frequencies, 0 otherwise. The minute of the
+    run time is used every N hours, counted from the hour of the run time."""
+    return _BACKUP_HOURLY_STEPS.get(str(freq or '').lower(), 0)
+
+
 def _next_run(sched: dict) -> str | None:
     if not sched.get("enabled"):
         return None
@@ -9048,7 +9057,16 @@ def _next_run(sched: dict) -> str | None:
 
     cand_local = None
 
-    if freq == "daily":
+    step = _backup_hourly_step(freq)
+    if step:
+        base = now_local.replace(minute=mm, second=0, microsecond=0)
+        for k in range(0, 25):
+            tmp = base + timedelta(hours=k)
+            if tmp > now_local and (tmp.hour - hh) % step == 0:
+                cand_local = tmp
+                break
+
+    elif freq == "daily":
         cand_local = at_local(now_local, hh, mm)
         if cand_local <= now_local:
             cand_local += timedelta(days=1)
@@ -9311,6 +9329,15 @@ def _backup_due_slot(
         )
     except Exception:
         hour, minute = 3, 0
+
+    step = _backup_hourly_step(frequency)
+    if step:
+        if local_time.minute != minute or (local_time.hour - hour) % step:
+            return None
+        return (
+            f"{frequency}:"
+            f"{local_time:%Y-%m-%dT%H:%M}"
+        )
 
     if (
         local_time.hour != hour

@@ -293,6 +293,29 @@
       }
     }
 
+    // Always-visible handle on the sidebar edge to open / close it
+    // (the Collapse button at the bottom is off-screen on short screens).
+    const edge = document.createElement("button");
+    edge.type = "button";
+    edge.id = "sb2-edge-toggle";
+    edge.className = "sb2-edge-toggle";
+    edge.innerHTML = '<i class="fas fa-angles-left" aria-hidden="true"></i>';
+    document.body.appendChild(edge);
+
+    function placeEdge() {
+      if (mobile()) {
+        edge.hidden = true;
+        return;
+      }
+      edge.hidden = false;
+      const rect = sidebar.getBoundingClientRect();
+      edge.style.left = Math.max(4, Math.round(rect.right - 14)) + "px";
+      const collapsed = sidebar.classList.contains("is-collapsed");
+      edge.querySelector("i").className = collapsed ? "fas fa-angles-right" : "fas fa-angles-left";
+      edge.setAttribute("aria-label", collapsed ? "Expand sidebar" : "Collapse sidebar");
+      edge.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    }
+
     function toggleDesktopCollapse() {
       if (mobile()) return;
       const collapsed = sidebar.classList.toggle("is-collapsed");
@@ -300,7 +323,19 @@
         localStorage.setItem(pinKey, collapsed ? "0" : "1");
       } catch (_) {}
       renderPin();
+      placeEdge();
+      setTimeout(placeEdge, 180);
+      setTimeout(placeEdge, 400);
     }
+
+    edge.addEventListener("click", (event) => {
+      event.preventDefault();
+      toggleDesktopCollapse();
+    });
+    window.addEventListener("resize", placeEdge);
+    sidebar.addEventListener("transitionend", placeEdge);
+    setTimeout(placeEdge, 0);
+    setTimeout(placeEdge, 500);
 
     if (mobileButton) {
       mobileButton.addEventListener("click", (event) => {

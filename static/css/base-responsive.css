@@ -274,3 +274,28 @@
     pointer-events: none !important;
   }
 }
+
+/* sidebar edge handle (desktop / tablet) */
+.sb2-edge-toggle {
+  position: fixed;
+  top: 16px;
+  left: 0;
+  z-index: 1400;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #0f1b26;
+  color: #e6eef5;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: left 0.2s ease, background 0.15s ease;
+}
+.sb2-edge-toggle:hover { background: #1a2b3a; }
+.sb2-edge-toggle[hidden] { display: none !important; }
+html[data-design=modern][data-theme=light] .sb2-edge-toggle { background: #fff; color: #334155; border-color: #dce3ea; }
+@media (max-width: 760px) { .sb2-edge-toggle { display: none !important; } }

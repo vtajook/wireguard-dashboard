@@ -3,6 +3,15 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — delete expired peers per interface
+
+- New **Delete expired** button next to Subnet/Delete on each local interface.
+  It asks "expired at least N days ago" (0 = all), shows how many peers match,
+  and deletes them in one batch after confirmation. A database copy is saved
+  first in `instance/safety_copies/` (newest 3 kept).
+- Peers in a subscription and first-use peers that never connected are never
+  touched. API: `POST /api/iface/<id>/delete_expired` `{"dry_run": true, "older_than_days": 0}`.
+
 ## 2026-11-11 — enforcement & stability audit
 
 Tested end-to-end with a stateful fake `wg`/`ip`, real SQLite and 2000 peers.

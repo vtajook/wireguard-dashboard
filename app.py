@@ -25881,7 +25881,22 @@ def api_peers_bulk_delete():
     ids = sorted(set(ids))[:10000]
     if not ids:
         return jsonify(ok=False, error='no_ids'), 400
+    try:
+        deleted, failed = _bulk_delete_peer_ids(ids)
+    except _BulkDeleteDBError as exc:
+        return jsonify(ok=False, error='database', detail=str(exc.args[0]), failed=exc.args[1]), 500
+    logpanel_action('peer_bulk_delete', f'requested={len(ids)}; deleted={deleted}; failed={len(failed)}')
+    return jsonify(ok=not failed, deleted=deleted, failed=failed)
 
+
+class _BulkDeleteDBError(Exception):
+    pass
+
+
+def _bulk_delete_peer_ids(ids):
+    """Remove peers (runtime, conf, routes, DB) in batches. Returns
+    (deleted, failed); raises _BulkDeleteDBError(detail, failed) when the
+    database phase fails."""
     peers = Peer.query.filter(Peer.id.in_(ids)).all()
     failed, done_ids = [], []
 
@@ -25946,12 +25961,92 @@ def api_peers_bulk_delete():
         except Exception as exc:
             db.session.rollback()
             current_app.logger.exception('Bulk delete DB phase failed')
-            return jsonify(ok=False, error='database', detail=str(exc), failed=failed), 500
+            raise _BulkDeleteDBError(str(exc), failed)
     db.session.expire_all()
 
     deleted += len(done_ids) - len(remaining)
-    logpanel_action('peer_bulk_delete', f'requested={len(ids)}; deleted={deleted}; failed={len(failed)}')
-    return jsonify(ok=not failed, deleted=deleted, failed=failed)
+    return deleted, failed
+
+
+def _db_safety_copy(tag):
+    """Consistent copy of the database before a destructive bulk action.
+    Keeps the newest 3 copies per tag."""
+    try:
+        import sqlite3 as _sq
+        if not DB_PATH or not os.path.isfile(DB_PATH):
+            return None
+        d = os.path.join(app.instance_path, 'safety_copies')
+        os.makedirs(d, exist_ok=True)
+        dst_path = os.path.join(d, f'{tag}_{time.strftime("%Y%m%d_%H%M%S")}.db')
+        src = _sq.connect(DB_PATH, timeout=30)
+        dst = _sq.connect(dst_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        old = sorted(Path(d).glob(f'{tag}_*.db'), key=lambda x: x.stat().st_mtime, reverse=True)
+        for x in old[3:]:
+            try:
+                x.unlink()
+            except OSError:
+                pass
+        return dst_path
+    except Exception:
+        current_app.logger.exception('safety copy failed')
+        return None
+
+
+@app.post('/api/iface/<int:iid>/delete_expired')
+@csrf.exempt
+@require_api_key_or_login
+def api_iface_delete_expired(iid):
+    """Delete every peer of one local interface whose time ran out.
+    {"dry_run": true} only counts. "older_than_days" keeps peers that
+    expired less than that many days ago (default 0 = all expired).
+    Peers that belong to a subscription and first-use peers that never
+    connected are never touched."""
+    iface = db.session.get(InterfaceConfig, iid) or abort(404)
+    if getattr(iface, 'node_id', None):
+        return jsonify(ok=False, error='local_interfaces_only'), 400
+    data = request.get_json(silent=True) or {}
+    dry = str(data.get('dry_run', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    try:
+        older = max(0.0, float(data.get('older_than_days') or 0))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='invalid_older_than_days'), 400
+    cutoff = now_ts() - int(older * 86400)
+
+    in_sub = {pid for (pid,) in db.session.query(SubscriptionPeer.peer_id).all()}
+    expired, skipped_sub = [], 0
+    for p in Peer.query.filter(Peer.iface_id == iface.id).all():
+        try:
+            exp = _effective_expiry_ts(p)
+        except Exception:
+            exp = None
+        if exp is None or exp > cutoff:
+            continue
+        if p.id in in_sub:
+            skipped_sub += 1
+            continue
+        expired.append(p)
+
+    sample = [p.name for p in sorted(expired, key=lambda x: _effective_expiry_ts(x) or 0)[:10]]
+    if dry or not expired:
+        return jsonify(ok=True, dry_run=True, iface=iface.name, count=len(expired),
+                       skipped_subscription=skipped_sub, sample=sample)
+
+    copy = _db_safety_copy('before_delete_expired')
+    ids = [p.id for p in expired]
+    try:
+        deleted, failed = _bulk_delete_peer_ids(ids)
+    except _BulkDeleteDBError as exc:
+        return jsonify(ok=False, error='database', detail=str(exc.args[0]), failed=exc.args[1]), 500
+    logpanel_action('iface_delete_expired',
+                    f'iface={iface.name}; older_than_days={older}; deleted={deleted}; failed={len(failed)}')
+    return jsonify(ok=not failed, iface=iface.name, deleted=deleted, failed=failed,
+                   skipped_subscription=skipped_sub,
+                   safety_copy=os.path.basename(copy) if copy else '')
 
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])

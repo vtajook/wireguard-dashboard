@@ -5308,6 +5308,21 @@
           rsz.title = `Change subnet size of ${iface.name} (${cidr})`;
           rsz.disabled = false;
         }
+        let cln = row.querySelector("#iface-clean-expired-btn");
+        if (getScopeId()) {
+          cln?.remove();
+        } else {
+          if (!cln) {
+            cln = document.createElement("button");
+            cln.id = "iface-clean-expired-btn";
+            cln.className = "iface-action-btn danger";
+            cln.type = "button";
+            row.insertBefore(cln, del);
+          }
+          cln.innerHTML = `<i class="fas fa-broom" aria-hidden="true"></i><span>Delete expired</span>`;
+          cln.title = `Delete all expired peers of ${iface.name}`;
+          cln.disabled = false;
+        }
       }
     } else if (chip) {
       chip.style.display = "none";
@@ -5316,6 +5331,7 @@
       row?.querySelector("#iface-toggle-btn")?.remove();
       row?.querySelector("#iface-delete-btn")?.remove();
       row?.querySelector("#iface-resize-btn")?.remove();
+      row?.querySelector("#iface-clean-expired-btn")?.remove();
     }
 
     const createBtn = $("#create-peer-btn");
@@ -6142,6 +6158,75 @@
       if (e.target.closest?.(".wgp-select")) e.stopPropagation();
     });
     wgpSyncBulkBar();
+  }
+
+  async function wgpIfaceCleanExpired(e) {
+    const btn = e.target.closest?.("#iface-clean-expired-btn");
+    if (!btn) return;
+    const iface = findIfaceById(SELECTED_IFACE_ID);
+    if (!iface || getScopeId()) return;
+    const ask = (o, fb) => (window.wgConfirm ? window.wgConfirm(o) : Promise.resolve(fb()));
+    const days = await ask(
+      {
+        title: `Delete expired peers – ${iface.name}`,
+        body: "Delete peers whose time ran out at least this many days ago (0 = every expired peer). Peers in a subscription and first-use peers that never connected are kept.",
+        value: "0",
+        okText: "Count",
+      },
+      () => prompt("Expired at least how many days ago? (0 = all)", "0"),
+    );
+    if (days == null || days === false) return;
+    const older = Number(String(days === true ? "0" : days).trim() || 0);
+    if (!Number.isFinite(older) || older < 0) {
+      toastSafe("Enter 0 or a positive number of days.", "error");
+      return;
+    }
+    const call = async (dry) => {
+      const r = await fetch(`/api/iface/${encodeURIComponent(iface.id)}/delete_expired`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ dry_run: dry, older_than_days: older }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok && !j.deleted) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+      return j;
+    };
+    btn.disabled = true;
+    try {
+      const pre = await call(true);
+      if (!pre.count) {
+        toastSafe(`${iface.name}: no expired peers to delete.`, "info");
+        return;
+      }
+      const sample = (pre.sample || []).join(", ");
+      const ok = await ask(
+        {
+          title: `Delete ${pre.count} expired peers`,
+          body: `${pre.count} expired peer${pre.count === 1 ? "" : "s"} on ${iface.name} will be deleted permanently (a database copy is saved first).${sample ? " Oldest: " + sample + (pre.count > 10 ? " …" : "") : ""}`,
+          okText: `Delete ${pre.count}`,
+        },
+        () => confirm(`Delete ${pre.count} expired peers?`),
+      );
+      if (!ok) return;
+      const loader = toastSafe(`Deleting ${pre.count} expired peers…`, "info", true);
+      try {
+        const j = await call(false);
+        const failed = Array.isArray(j.failed) ? j.failed.length : 0;
+        toastSafe(
+          failed ? `Deleted ${j.deleted || 0}; ${failed} failed.` : `Deleted ${j.deleted || 0} expired peers.`,
+          failed ? "warning" : "success",
+        );
+      } finally {
+        try { loader?.remove?.(); } catch (_) {}
+      }
+      await refreshPeers?.({ abortPrev: true });
+      try { await refreshInterfacesUI({ force: true }); } catch (_) {}
+    } catch (err) {
+      toastSafe(`Delete expired failed: ${err.message || err}`, "error");
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function wgpIfaceResize(e) {
@@ -7347,6 +7432,7 @@
       attachOpen(peersCont);
       wgpInitBulk(peersCont);
       document.addEventListener("click", wgpIfaceResize);
+      document.addEventListener("click", wgpIfaceCleanExpired);
     }
 
     refreshPeers();

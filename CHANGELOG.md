@@ -3,6 +3,16 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — update reload fix, sidebar handle
+
+- After an update the page reloaded before the panel had actually restarted
+  (the updater reports "completed" first and restarts a second later), so it
+  showed an error and needed several manual refreshes. The page now waits
+  until `/api/healthz` answers from the new panel process (new `boot` id) and
+  then reloads once. Takes effect from the update *after* this one.
+- Round button on the sidebar edge to expand / collapse it (desktop/tablet).
+- Resellers page fits phone screens.
+
 ## 2026-11-18 — 2.2.0: reseller (agent) panel
 
 - New **Resellers** page in the sidebar. For each agent you set: username and

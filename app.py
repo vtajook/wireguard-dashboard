@@ -10097,7 +10097,11 @@ def _confirm_runtime(p):
 @app.get("/api/healthz")
 @require_api_key_or_login
 def healthz():
-    return jsonify(ok=True, ts=now_ts()), 200
+    # boot: same in every worker of one panel run, new after each restart
+    return jsonify(ok=True, ts=now_ts(), boot=_PANEL_BOOT_ID), 200
+
+
+_PANEL_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
 
 
 @app.get('/api/runtime')

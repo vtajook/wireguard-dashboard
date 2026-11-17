@@ -16,7 +16,61 @@
     lastTerminalNotice: '',
     localVersion: null,
     targets: [],
+    bootId: null,
+    sawBusy: false,
+    waitingRestart: false,
   };
+
+  // The updater writes "completed" BEFORE the detached service restart
+  // happens, so reloading right away hit the old process or a stopped panel
+  // (user had to refresh several times). Wait until /api/healthz answers from
+  // a NEW process (different boot id), then reload once.
+  async function readBootId() {
+    try {
+      const r = await fetch('/api/healthz?_=' + Date.now(), { credentials: 'same-origin', cache: 'no-store' });
+      if (!r.ok) return null;
+      const j = await r.json().catch(() => ({}));
+      return j.boot || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function waitForRestartThenReload() {
+    if (state.waitingRestart) return;
+    state.waitingRestart = true;
+    const old = state.bootId;
+    const started = Date.now();
+    let seenDown = false;
+    const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+    while (Date.now() - started < 180000) {
+      await sleep(1500);
+      const secs = Math.floor((Date.now() - started) / 1000);
+      setText('pu-local-stage', `Update installed. Waiting for the panel to restart… ${secs}s`);
+      try {
+        const r = await fetch('/api/healthz?_=' + Date.now(), {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined,
+        });
+        if (!r.ok) {
+          seenDown = true;
+          continue;
+        }
+        const j = await r.json().catch(() => ({}));
+        const restarted = j.boot && old ? j.boot !== old : seenDown;
+        if (restarted) {
+          setText('pu-local-stage', 'Panel restarted. Reloading…');
+          await sleep(1500);
+          window.location.reload();
+          return;
+        }
+      } catch (_) {
+        seenDown = true;
+      }
+    }
+    window.location.reload();
+  }
 
   const BUSY = new Set([
     'queued',
@@ -555,6 +609,7 @@
     state.lastStatus = status || {};
 
     const name = statusName(status);
+    if (isBusy(status) || name === 'restarting' || name === 'restart') state.sawBusy = true;
     const percent = Math.max(
       0,
       Math.min(100, Number(status?.percent || 0)),
@@ -629,9 +684,14 @@
 
       setDisabled('pu-refresh', false);
 
-      setTimeout(() => {
-        refreshCenter().catch(() => {});
-      }, 900);
+      if (state.sawBusy && name !== 'rollback_completed') {
+        state.sawBusy = false;
+        waitForRestartThenReload();
+      } else {
+        setTimeout(() => {
+          refreshCenter().catch(() => {});
+        }, 900);
+      }
     }
 
     if (TERMINAL_BAD.has(name)) {
@@ -699,6 +759,7 @@
 
   function enterReconnectMode() {
     if (state.reconnecting) return;
+    state.sawBusy = true;
 
     state.reconnecting = true;
     state.panelReachableAfterRestart = false;
@@ -809,7 +870,7 @@
         setDisabled('pu-refresh', false);
         window.dispatchEvent(new CustomEvent('wg-panel-update-finished'));
         if (name !== 'rollback_completed') {
-          setTimeout(() => window.location.reload(), 1200);
+          waitForRestartThenReload();
         }
         return;
       }
@@ -1291,6 +1352,8 @@
     $('pu-log-clear')?.addEventListener('click', () => {
       setText('pu-log-output', 'No update activity yet.');
     });
+
+    readBootId().then((b) => { if (b && !state.bootId) state.bootId = b; });
 
     api('/api/panel/update/status', { timeout: 5000 })
       .then((status) => {

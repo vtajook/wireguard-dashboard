@@ -67,6 +67,9 @@ class Peer(db.Model):
     shared_last_at       = db.Column(db.Integer)      # unix ts of last detection
     shared_block_until   = db.Column(db.Integer)      # unix ts; blocked until then
 
+    # owner reseller (NULL = created by the admin / bot)
+    reseller_id          = db.Column(db.Integer, index=True)
+
     events               = db.relationship('PeerEvent', backref='peer', lazy=True, cascade="all, delete-orphan")
     created_at = db.Column(
     db.DateTime,
@@ -196,3 +199,56 @@ class Admin2FA(db.Model):
     recovery_hashes = Column(Text, nullable=True)     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class Reseller(db.Model):
+    """Agent account: own login at /agent, prepaid wallet, per-user price."""
+    id              = db.Column(db.Integer, primary_key=True)
+    username        = db.Column(db.String(64), unique=True, nullable=False)
+    password_hash   = db.Column(db.String(255), nullable=False)
+    enabled         = db.Column(db.Boolean, default=True, nullable=False)
+    balance         = db.Column(BigInteger, default=0, nullable=False)       # Toman
+    price_per_month = db.Column(BigInteger, default=0, nullable=False)       # Toman per 30 days
+    max_users       = db.Column(db.Integer, default=0, nullable=False)       # 0 = no limit
+    allowed_ifaces  = db.Column(db.Text, default='')                         # comma separated interface ids
+    test_per_day    = db.Column(db.Integer, default=2, nullable=False)       # free test accounts per day (0 = none)
+    test_hours      = db.Column(db.Integer, default=24, nullable=False)
+    test_mb         = db.Column(db.Integer, default=200, nullable=False)
+    allow_data_limit = db.Column(db.Boolean, default=True, nullable=False)   # may set a GB cap on users
+    note            = db.Column(db.String(255), default='')
+    session_ver     = db.Column(db.Integer, default=1, nullable=False)       # bump -> logs out
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_login_at   = db.Column(db.DateTime)
+
+    @staticmethod
+    def hash_pw(password: str) -> str:
+        return pwd_ctx.hash((password or "").strip())
+
+    def verify_pw(self, password: str) -> bool:
+        try:
+            return pwd_ctx.verify((password or "").strip(), self.password_hash)
+        except Exception:
+            return False
+
+    def iface_ids(self):
+        out = []
+        for x in (self.allowed_ifaces or '').split(','):
+            x = x.strip()
+            if x.isdigit():
+                out.append(int(x))
+        return out
+
+
+class ResellerTxn(db.Model):
+    """Wallet ledger. amount > 0 = money in (charge/refund), < 0 = spent."""
+    id            = db.Column(db.Integer, primary_key=True)
+    reseller_id   = db.Column(db.Integer, nullable=False, index=True)
+    at            = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    kind          = db.Column(db.String(16), nullable=False)    # charge, create, renew, refund, adjust, test
+    amount        = db.Column(BigInteger, default=0, nullable=False)
+    balance_after = db.Column(BigInteger, default=0, nullable=False)
+    peer_id       = db.Column(db.Integer, index=True)
+    peer_name     = db.Column(db.String(64))
+    months        = db.Column(db.Integer, default=0)
+    actor         = db.Column(db.String(16), default='reseller')  # admin / reseller
+    note          = db.Column(db.String(255), default='')

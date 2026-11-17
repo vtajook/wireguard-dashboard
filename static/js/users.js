@@ -204,6 +204,15 @@
     `);
     }
 
+    if (p.reseller) {
+      tags.push(`
+      <span class="peer-tag reseller" title="Created by reseller ${peerEsc(p.reseller)}">
+        <i class="fas fa-handshake" aria-hidden="true"></i>
+        <span>${peerEsc(p.reseller)}</span>
+      </span>
+    `);
+    }
+
     if (isDepleting(p)) {
       tags.push(`
       <span class="peer-tag depleting" title="Depleting: low data or time remaining">

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>پنل نمایندگی</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/agent.css') }}">
+</head>
+<body>
+  <header class="ag-top">
+    <div class="ag-brand">
+      <strong id="ag-user">…</strong>
+      <span>پنل نمایندگی</span>
+    </div>
+    <div class="ag-wallet">
+      <span class="ag-wallet-label">موجودی کیف پول</span>
+      <strong id="ag-balance">…</strong>
+    </div>
+    <a class="ag-btn ghost" href="/agent/logout">خروج</a>
+  </header>
+
+  <main class="ag-main">
+    <section class="ag-stats" aria-label="خلاصه">
+      <div class="ag-stat"><span>قیمت هر ماه</span><strong id="st-price">…</strong></div>
+      <div class="ag-stat"><span>کاربران</span><strong id="st-users">…</strong></div>
+      <div class="ag-stat"><span>تست ۲۴ ساعت اخیر</span><strong id="st-tests">…</strong></div>
+      <div class="ag-stat"><span>هزینه ۳۰ روز اخیر</span><strong id="st-spent">…</strong></div>
+    </section>
+
+    <div id="ag-low" class="ag-alert warn" hidden>موجودی شما برای ساخت کاربر کافی نیست. برای شارژ کیف پول با مدیر تماس بگیرید.</div>
+
+    <section class="ag-card">
+      <h2>ساخت کاربر جدید</h2>
+      <form id="ag-create" class="ag-form" autocomplete="off">
+        <label>نام کاربر<input id="c-name" required dir="ltr" maxlength="32" placeholder="ali_123"></label>
+        <label id="c-iface-wrap">سرور<select id="c-iface"></select></label>
+        <label>مدت<select id="c-months"></select></label>
+        <label id="c-data-wrap">حجم (گیگ)<input id="c-data" type="number" min="0" step="1" value="0" dir="ltr"><small>۰ = نامحدود</small></label>
+        <label class="ag-check"><input id="c-first" type="checkbox" checked><span>زمان از اولین اتصال شروع شود</span></label>
+        <div class="ag-form-foot">
+          <span class="ag-cost">هزینه: <strong id="c-cost">…</strong></span>
+          <button class="ag-btn ghost" type="button" id="c-test">ساخت اکانت تست</button>
+          <button class="ag-btn primary" type="submit" id="c-submit">ساخت کاربر</button>
+        </div>
+      </form>
+      <div id="c-result" class="ag-result" hidden></div>
+    </section>
+
+    <nav class="ag-tabs" role="tablist">
+      <button class="active" data-tab="users" role="tab">کاربران من</button>
+      <button data-tab="txns" role="tab">تراکنش‌ها</button>
+    </nav>
+
+    <section class="ag-card" id="tab-users">
+      <div class="ag-list-head">
+        <input id="u-q" type="search" placeholder="جستجوی نام…" dir="ltr">
+        <span id="u-total" class="ag-muted"></span>
+      </div>
+      <div id="u-list" class="ag-list"></div>
+      <div class="ag-pager"><button class="ag-btn ghost" id="u-prev">قبلی</button><span id="u-page"></span><button class="ag-btn ghost" id="u-next">بعدی</button></div>
+    </section>
+
+    <section class="ag-card" id="tab-txns" hidden>
+      <div id="t-list" class="ag-list"></div>
+    </section>
+  </main>
+
+  <dialog id="ag-dialog" class="ag-dialog">
+    <form method="dialog">
+      <h3 id="d-title"></h3>
+      <p id="d-body"></p>
+      <select id="d-select" hidden></select>
+      <footer><button value="cancel" class="ag-btn ghost">انصراف</button><button value="ok" class="ag-btn primary" id="d-ok">تأیید</button></footer>
+    </form>
+  </dialog>
+  <div id="ag-toast" class="ag-toast" role="status" aria-live="polite"></div>
+  <script src="{{ url_for('static', filename='js/agent.js') }}"></script>
+</body>
+</html>

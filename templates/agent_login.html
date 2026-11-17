@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ورود نمایندگان</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/agent.css') }}">
+</head>
+<body class="ag-login-body">
+  <main class="ag-login">
+    <div class="ag-login-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M12 2 3 6v6c0 5 3.8 9.7 9 10 5.2-.3 9-5 9-10V6l-9-4Zm0 2.2 7 3.1V12c0 4-3 7.8-7 8-4-.2-7-4-7-8V7.3l7-3.1Z"/></svg>
+    </div>
+    <h1>پنل نمایندگی</h1>
+    <p class="ag-login-sub">با نام کاربری و رمزی که مدیر به شما داده وارد شوید</p>
+    {% if error %}<div class="ag-alert bad" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" autocomplete="on">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label>نام کاربری<input name="username" required autocomplete="username" dir="ltr" autofocus></label>
+      <label>رمز عبور<input name="password" type="password" required autocomplete="current-password" dir="ltr"></label>
+      <button class="ag-btn primary wide" type="submit">ورود</button>
+    </form>
+  </main>
+</body>
+</html>

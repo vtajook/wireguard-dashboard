@@ -3,6 +3,28 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — 2.2.0: reseller (agent) panel
+
+- New **Resellers** page in the sidebar. For each agent you set: username and
+  password, price per month (Toman), max users, allowed interfaces, free test
+  accounts per 24h (length and MB), whether they may put a GB cap on users,
+  and enabled/disabled. **Charge** adds money to the agent's wallet (a minus
+  amount deducts). Every wallet movement is in the agent's **ledger**.
+- Agents log in at **`/agent`** (own login page, Persian UI). They can only:
+  create users (only on their allowed interfaces, only with enough balance —
+  the price is taken from the wallet), create free test accounts, renew
+  (remaining time is kept, traffic restarts from zero), disable / re-enable
+  users they disabled themselves, delete users, copy the user link and
+  download the config. Deleting a user that was never used within 48 h of
+  creation refunds its cost.
+- Agents are never logged in as the admin: every admin page and API stays
+  closed to them, and they only ever see their own users.
+- The admin sees the agent's users (Resellers → Users) and a reseller tag on
+  each of those users on the Peers page, and can disable / re-enable all users
+  of an agent at once. Deleting an agent keeps its users (they become yours).
+- Fixed a crash in automatic backup error logging and a dead check for nodes
+  without a public key.
+
 ## 2026-11-18 — delete expired peers per interface
 
 - New **Delete expired** button next to Subnet/Delete on each local interface.

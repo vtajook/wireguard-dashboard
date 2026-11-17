@@ -330,6 +330,16 @@
             ><span class="sb2-text">Subscriptions</span>
           </a>
 
+          <a
+            href="/resellers"
+            class="sb2-link{{ ' active' if request.path.startswith('/resellers') else '' }}"
+            data-tip="Resellers"
+            aria-current="{{ 'page' if request.path.startswith('/resellers') else '' }}"
+          >
+            <i class="fas fa-handshake" aria-hidden="true"></i
+            ><span class="sb2-text">Resellers</span>
+          </a>
+
           {% if HAS_NODES %}
           <div class="sb2-section">Infrastructure</div>
           <a
@@ -412,7 +422,9 @@
           in [ (url_for('index'), 'Dashboard', 'fa-house', ep == 'index'),
           (url_for('users'), 'Peers', 'fa-users', ep == 'users'),
           ('/subscriptions', 'Subscriptions', 'fa-credit-card',
-          request.path.startswith('/subscriptions'))] %}
+          request.path.startswith('/subscriptions')),
+          ('/resellers', 'Resellers', 'fa-handshake',
+          request.path.startswith('/resellers'))] %}
           <a
             class="sb2-link{{ ' active' if active else '' }}"
             href="{{ href }}"
@@ -632,7 +644,7 @@
             >{{
             {'index':'Overview','settings_page':'Settings','subscriptions_page':'Subscriptions','logs_page':'Activity','users':'Peers','nodes':'Nodes','operations.page':'Panel
             Center','api_docs_page':'API Docs','api_docs':'API
-            Docs','backup_page':'Backup'}.get(request.endpoint, 'Control panel')
+            Docs','backup_page':'Backup','resellers_page':'Resellers'}.get(request.endpoint, 'Control panel')
             }}</b
           >
         </div>

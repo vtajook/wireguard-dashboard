@@ -38,6 +38,8 @@ from models import (
     Subscription,
     SubscriptionPeer,
     ShortLink,
+    Reseller,
+    ResellerTxn,
 )
 from forms import PeerForm
 from auth import require_api_key, admin_required, require_api_key_or_login
@@ -261,6 +263,8 @@ def _peer_schema():
     for _col in ('shared_strikes', 'shared_last_at', 'shared_block_until'):
         if _col not in peer_cols:
             statements.append(f'ALTER TABLE peer ADD COLUMN {_col} INTEGER')
+    if 'reseller_id' not in peer_cols:
+        statements.append('ALTER TABLE peer ADD COLUMN reseller_id INTEGER')
 
     if insp.has_table('subscription'):
         subscription_cols = {
@@ -3039,7 +3043,7 @@ def _http_security_scope_applies(path, scope):
     p = str(path or "").lower()
     prefixes = (
         "/login", "/logout", "/register", "/settings", "/users", "/nodes",
-        "/logs", "/backup", "/api/", "/admin",
+        "/logs", "/backup", "/api/", "/admin", "/agent",
     )
     return p.startswith(prefixes)
 
@@ -8727,7 +8731,7 @@ def backup_full():
             saved_auto_backup = (_save_autobackup(data,keep=keep,))
         except Exception as e:
             saved_auto_backup = None
-            current_app.logger.exception("Automatic backup storage failed: %s",exc,)
+            current_app.logger.exception("Automatic backup storage failed: %s",e,)
 
     # -----------------------------
     # Send to Telegram
@@ -14583,7 +14587,7 @@ def _http_error_is_pubkey_unavailable(exc) -> bool:
     if response is None:
         return False
     try:
-        payload = _node_payload(response)
+        payload = response.json()
     except Exception:
         return False
     return (
@@ -16784,6 +16788,7 @@ def _perf_indexes():
         'CREATE INDEX IF NOT EXISTS ix_peer_name ON peer (name)',
         'CREATE INDEX IF NOT EXISTS ix_peer_status ON peer (status)',
         'CREATE INDEX IF NOT EXISTS ix_admin_log_at ON admin_log (at)',
+        'CREATE INDEX IF NOT EXISTS ix_peer_reseller_id ON peer (reseller_id)',
     )
     for sql in stmts:
         try:
@@ -22216,6 +22221,8 @@ def panel_peers():
                 'subscription_id': getattr(subscription, 'id', None),
                 'subscription_name': getattr(subscription, 'name', '') or '',
                 'subscription_access': subscription_access_state or None,
+                'reseller_id': getattr(peer, 'reseller_id', None),
+                'reseller': _reseller_name_map().get(getattr(peer, 'reseller_id', None)) or '',
 
                 'shared_strikes': int(getattr(peer, 'shared_strikes', 0) or 0),
                 'shared_last_at': int(getattr(peer, 'shared_last_at', 0) or 0) or None,
@@ -34319,6 +34326,735 @@ register_operations(app, globals())
 
 from panel_operations.profile import profile_bp
 app.register_blueprint(profile_bp)
+
+# =====================================================================
+# Resellers (agents)
+#   * own login at /agent (Flask session keys rs_id / rs_ver); a reseller
+#     is never `current_user`, so every admin page / API stays closed to it
+#   * prepaid wallet in Toman; price per 30 days set per reseller by admin
+#   * may only create on the interfaces the admin allowed, up to max_users
+#   * sees and manages ONLY its own peers; admin sees everything
+# =====================================================================
+_RS_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$')
+_RS_MONTHS = (1, 2, 3, 6, 12)
+_RS_REFUND_HOURS = 48
+_RS_NAME_MEMO = {'ts': 0.0, 'map': {}}
+
+
+def _reseller_name_map():
+    memo = _RS_NAME_MEMO
+    if time.monotonic() - memo['ts'] < 10:
+        return memo['map']
+    try:
+        memo['map'] = {r.id: r.username for r in Reseller.query.all()}
+    except Exception:
+        memo['map'] = {}
+    memo['ts'] = time.monotonic()
+    return memo['map']
+
+
+def _rs_internal(view, path, payload=None, method='POST', **kwargs):
+    """Run an existing admin API view in-process (no HTTP, no auth layer)
+    and return (status_code, json_dict). Used so resellers go through the
+    exact same create / edit / delete code as the admin and the bot."""
+    fn = getattr(view, '__wrapped__', view)
+    from werkzeug.exceptions import HTTPException as _HTTPExc
+    with app.test_request_context(path, method=method, json=(payload or {})):
+        try:
+            rv = fn(**kwargs)
+        except _HTTPExc as exc:
+            return int(exc.code or 500), {'error': 'http_%s' % exc.code, 'detail': exc.description or ''}
+        resp = app.make_response(rv)
+    try:
+        body = resp.get_json(silent=True) or {}
+    except Exception:
+        body = {}
+    return resp.status_code, body
+
+
+def _rs_current():
+    rid = session.get('rs_id')
+    if not rid:
+        return None
+    try:
+        r = db.session.get(Reseller, int(rid))
+    except Exception:
+        return None
+    if not r or not r.enabled or int(r.session_ver or 1) != int(session.get('rs_ver') or 0):
+        return None
+    return r
+
+
+def reseller_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        r = _rs_current()
+        if r is None:
+            if (request.path or '').startswith('/api/'):
+                return jsonify(ok=False, error='reseller_login_required'), 401
+            return redirect('/agent/login')
+        g.reseller = r
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def _admin_only(fn):
+    """login_required + refuse API-key-less non-admins (defence in depth)."""
+    @wraps(fn)
+    @login_required
+    def wrapper(*args, **kwargs):
+        if not getattr(current_user, 'is_admin', False):
+            return jsonify(ok=False, error='forbidden'), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+def _rs_txn(r, kind, amount, actor='reseller', peer=None, months=0, note=''):
+    db.session.refresh(r)
+    t = ResellerTxn(
+        reseller_id=r.id, kind=kind, amount=int(amount),
+        balance_after=int(r.balance or 0), actor=actor,
+        peer_id=getattr(peer, 'id', None) if peer is not None else None,
+        peer_name=(getattr(peer, 'name', None) or '')[:64] if peer is not None else None,
+        months=int(months or 0), note=(note or '')[:255],
+    )
+    db.session.add(t)
+    db.session.commit()
+    return t
+
+
+def _rs_take(r, cost):
+    """Atomically take `cost` from the wallet; False when not enough."""
+    cost = int(cost)
+    if cost <= 0:
+        return True
+    with db.engine.begin() as conn:
+        res = conn.execute(
+            text('UPDATE reseller SET balance = balance - :c WHERE id = :i AND balance >= :c'),
+            {'c': cost, 'i': r.id},
+        )
+        ok = (res.rowcount or 0) == 1
+    db.session.expire(r)
+    return ok
+
+
+def _rs_give(r, amount):
+    amount = int(amount)
+    if amount == 0:
+        return
+    with db.engine.begin() as conn:
+        conn.execute(text('UPDATE reseller SET balance = balance + :a WHERE id = :i'),
+                     {'a': amount, 'i': r.id})
+    db.session.expire(r)
+
+
+def _rs_last_flag_event(peer):
+    row = (PeerEvent.query
+           .filter(PeerEvent.peer_id == peer.id,
+                   PeerEvent.event.in_(('disabled', 'enabled', 'reseller_disabled', 'reseller_suspended')))
+           .order_by(PeerEvent.id.desc()).first())
+    return row.event if row else ''
+
+
+def _rs_peer_rows(peers):
+    """Compact rows for the reseller page and the admin reseller view."""
+    now = now_ts()
+    dump = _wg_dump_all() or {}
+    ids = [p.id for p in peers]
+    tokens = {}
+    if ids:
+        for sl in ShortLink.query.filter(ShortLink.peer_id.in_(ids)).all():
+            tokens.setdefault(sl.peer_id, sl.token)
+    rows = []
+    for p in peers:
+        iface = getattr(p, 'iface', None)
+        hs, live = 0, None
+        try:
+            ent = (dump.get(iface_devname(iface)) or {}).get(p.public_key) if iface is not None else None
+            if ent:
+                hs, live = int(ent[0] or 0), int(ent[1] or 0) + int(ent[2] or 0)
+        except Exception:
+            pass
+        try:
+            used = _accumulate_peer_usage(p, live_total=live)[0] if live is not None else int(p.used_bytes_total or 0)
+        except Exception:
+            used = int(p.used_bytes_total or 0)
+        try:
+            exp = _effective_expiry_ts(p)
+        except Exception:
+            exp = None
+        started = True
+        try:
+            started = _timer_anchor_ts(p) is not None
+        except Exception:
+            pass
+        tok = tokens.get(p.id)
+        rows.append({
+            'id': p.id,
+            'name': p.name,
+            'iface': getattr(iface, 'name', '') or '',
+            'status': p.status or '',
+            'online': bool(hs and now - hs <= 180),
+            'last_handshake': hs or None,
+            'expires_at': exp,
+            'expired': bool(exp is not None and exp <= now),
+            'days_total': float(p.time_limit_days or 0),
+            'started': started,
+            'used_bytes': int(used or 0),
+            'limit_bytes': p.limit_bytes() if hasattr(p, 'limit_bytes') else None,
+            'multi_device': bool(_su_penalty_active(p)) if '_su_penalty_active' in globals() else False,
+            'created_at': to_ts(p.created_at),
+            'link': _shortlink_url(tok) if tok else '',
+            'reseller_disabled': (p.status == 'offline' and _rs_last_flag_event(p) == 'reseller_disabled'),
+        })
+    return rows
+
+
+def _rs_public(r, with_stats=True):
+    d = {
+        'id': r.id, 'username': r.username, 'enabled': bool(r.enabled),
+        'balance': int(r.balance or 0), 'price_per_month': int(r.price_per_month or 0),
+        'max_users': int(r.max_users or 0), 'iface_ids': r.iface_ids(),
+        'test_per_day': int(r.test_per_day or 0), 'test_hours': int(r.test_hours or 0),
+        'test_mb': int(r.test_mb or 0), 'allow_data_limit': bool(r.allow_data_limit),
+        'note': r.note or '', 'created_at': to_ts(r.created_at),
+        'last_login_at': to_ts(r.last_login_at) if r.last_login_at else None,
+    }
+    if with_stats:
+        q = Peer.query.filter(Peer.reseller_id == r.id)
+        d['users'] = q.count()
+        d['users_online_status'] = q.filter(Peer.status == 'online').count()
+        since = datetime.utcnow() - timedelta(days=30)
+        spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
+                 .filter(ResellerTxn.reseller_id == r.id,
+                         ResellerTxn.kind.in_(('create', 'renew', 'refund')),
+                         ResellerTxn.at >= since).scalar()) or 0
+        d['spent_30d'] = -int(spent)
+    return d
+
+
+def _rs_tests_last_24h(r):
+    since = datetime.utcnow() - timedelta(hours=24)
+    return ResellerTxn.query.filter(ResellerTxn.reseller_id == r.id, ResellerTxn.kind == 'test',
+                                    ResellerTxn.at >= since).count()
+
+
+def _rs_own_peer(r, pid):
+    p = db.session.get(Peer, int(pid))
+    if not p or p.reseller_id != r.id:
+        abort(404)
+    return p
+
+
+# ---------------- reseller login / page ----------------
+@app.route('/agent/login', methods=['GET', 'POST'])
+def agent_login():
+    error = ''
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = (request.form.get('password') or '').strip()
+        r = Reseller.query.filter(func.lower(Reseller.username) == username.lower()).first() if username else None
+        if not r or not r.verify_pw(password):
+            try:
+                _http_security_record_login_failure(username=f'agent:{username or "unknown"}',
+                                                    failure_type='credentials')
+            except Exception:
+                pass
+            time.sleep(0.8)
+            error = 'نام کاربری یا رمز اشتباه است'
+        elif not r.enabled:
+            error = 'حساب نمایندگی شما غیرفعال است'
+        else:
+            session['rs_id'] = r.id
+            session['rs_ver'] = int(r.session_ver or 1)
+            session.permanent = True
+            r.last_login_at = datetime.utcnow()
+            db.session.commit()
+            try:
+                logpanel_action('reseller_login', f'reseller={r.username}')
+            except Exception:
+                pass
+            return redirect('/agent')
+    return render_template('agent_login.html', error=error)
+
+
+@app.get('/agent/logout')
+def agent_logout():
+    session.pop('rs_id', None)
+    session.pop('rs_ver', None)
+    return redirect('/agent/login')
+
+
+@app.get('/agent')
+@reseller_required
+def agent_page():
+    return render_template('agent.html')
+
+
+@app.get('/api/agent/me')
+@reseller_required
+def agent_me():
+    r = g.reseller
+    d = _rs_public(r)
+    ifaces = []
+    for i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(r.iface_ids() or [-1])).all():
+        if getattr(i, 'node_id', None):
+            continue
+        ifaces.append({'id': i.id, 'name': i.name})
+    d['ifaces'] = ifaces
+    d['months'] = list(_RS_MONTHS)
+    d['tests_used_24h'] = _rs_tests_last_24h(r)
+    d['refund_hours'] = _RS_REFUND_HOURS
+    d.pop('note', None)
+    return jsonify(ok=True, me=d)
+
+
+@app.get('/api/agent/peers')
+@reseller_required
+def agent_peers():
+    r = g.reseller
+    q = Peer.query.filter(Peer.reseller_id == r.id)
+    s = (request.args.get('q') or '').strip()
+    if s:
+        q = q.filter(Peer.name.ilike(f'%{s}%'))
+    total = q.count()
+    page = max(1, request.args.get('page', 1, type=int))
+    per = min(100, max(10, request.args.get('per', 50, type=int)))
+    peers = q.order_by(Peer.id.desc()).offset((page - 1) * per).limit(per).all()
+    return jsonify(ok=True, total=total, page=page, per=per, peers=_rs_peer_rows(peers))
+
+
+@app.get('/api/agent/txns')
+@reseller_required
+def agent_txns():
+    r = g.reseller
+    rows = (ResellerTxn.query.filter(ResellerTxn.reseller_id == r.id)
+            .order_by(ResellerTxn.id.desc()).limit(200).all())
+    return jsonify(ok=True, txns=[_rs_txn_public(t) for t in rows])
+
+
+def _rs_txn_public(t):
+    return {'id': t.id, 'at': to_ts(t.at), 'kind': t.kind, 'amount': int(t.amount or 0),
+            'balance_after': int(t.balance_after or 0), 'peer_id': t.peer_id,
+            'peer_name': t.peer_name or '', 'months': int(t.months or 0),
+            'actor': t.actor or '', 'note': t.note or ''}
+
+
+@app.post('/api/agent/peers')
+@reseller_required
+def agent_create_peer():
+    r = g.reseller
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    test = str(data.get('test', '')).strip().lower() in ('1', 'true', 'yes', 'on')
+    if not _RS_NAME_RE.match(name) or name.isdigit():
+        return jsonify(ok=False, error='invalid_name',
+                       detail='نام فقط حروف انگلیسی، عدد و _ . - (۳ تا ۳۲ کاراکتر) و نباید فقط عدد باشد'), 400
+    if Peer.query.filter(func.lower(Peer.name) == name.lower()).first():
+        return jsonify(ok=False, error='name_taken', detail='این نام قبلاً استفاده شده'), 409
+    try:
+        iface_id = int(data.get('iface_id') or 0)
+    except (TypeError, ValueError):
+        iface_id = 0
+    allowed = r.iface_ids()
+    if not allowed:
+        return jsonify(ok=False, error='no_iface', detail='هنوز سروری برای شما تعیین نشده؛ به مدیر بگویید'), 400
+    if not iface_id and len(allowed) == 1:
+        iface_id = allowed[0]
+    iface = db.session.get(InterfaceConfig, iface_id) if iface_id in allowed else None
+    if iface is None or getattr(iface, 'node_id', None):
+        return jsonify(ok=False, error='iface_not_allowed', detail='این سرور برای شما مجاز نیست'), 403
+    if r.max_users and Peer.query.filter(Peer.reseller_id == r.id).count() >= r.max_users:
+        return jsonify(ok=False, error='max_users', detail=f'سقف تعداد کاربر شما ({r.max_users}) پر شده'), 403
+
+    first_use = str(data.get('start_on_first_use', '1')).strip().lower() in ('1', 'true', 'yes', 'on')
+    data_gb = 0.0
+    if test:
+        if not r.test_per_day:
+            return jsonify(ok=False, error='tests_disabled', detail='ساخت اکانت تست برای شما فعال نیست'), 403
+        if _rs_tests_last_24h(r) >= r.test_per_day:
+            return jsonify(ok=False, error='tests_limit',
+                           detail=f'سهمیه تست ۲۴ ساعت اخیر ({r.test_per_day}) تمام شده'), 403
+        months, cost = 0, 0
+        days = max(1, int(r.test_hours or 24)) / 24.0
+        payload_limit = {'data_limit_value': max(1, int(r.test_mb or 200)), 'data_limit_unit': 'Mi'}
+    else:
+        try:
+            months = int(data.get('months') or 1)
+        except (TypeError, ValueError):
+            months = 0
+        if months not in _RS_MONTHS:
+            return jsonify(ok=False, error='invalid_months'), 400
+        cost = int(r.price_per_month or 0) * months
+        days = 30 * months
+        payload_limit = {'data_limit_value': 0, 'data_limit_unit': 'Gi'}
+        if r.allow_data_limit:
+            try:
+                data_gb = max(0.0, min(10000.0, float(data.get('data_gb') or 0)))
+            except (TypeError, ValueError):
+                return jsonify(ok=False, error='invalid_data_gb'), 400
+            if data_gb:
+                payload_limit = {'data_limit_value': data_gb, 'data_limit_unit': 'Gi'}
+        if cost > 0 and not _rs_take(r, cost):
+            return jsonify(ok=False, error='low_balance',
+                           detail=f'موجودی کافی نیست. هزینه: {cost:,} تومان، موجودی: {int(r.balance or 0):,} تومان'), 402
+
+    payload = {
+        'scope': 'local', 'iface_id': iface.id, 'name': name,
+        'time_limit_days': days, 'start_on_first_use': bool(first_use and not test),
+        'unlimited': False,
+    }
+    payload.update(payload_limit)
+    try:
+        code, body = _rs_internal(peers_create, '/api/peers', payload)
+    except Exception as exc:
+        current_app.logger.exception('reseller create failed')
+        code, body = 500, {'error': 'create_failed', 'detail': str(exc)}
+    pid = body.get('id') if isinstance(body, dict) else None
+    peer = db.session.get(Peer, int(pid)) if (code == 200 and pid) else None
+    if peer is None:
+        db.session.rollback()
+        if cost > 0:
+            _rs_give(r, cost)
+        return jsonify(ok=False, error=body.get('error') or 'create_failed',
+                       detail=body.get('detail') or 'ساخت کاربر انجام نشد؛ هزینه برگشت داده شد'), 502
+    peer.reseller_id = r.id
+    db.session.commit()
+    try:
+        log_event(peer, 'reseller_created', f'reseller={r.username}; months={months}; test={int(test)}; cost={cost}')
+    except Exception:
+        pass
+    _rs_txn(r, 'test' if test else 'create', -cost, peer=peer, months=months,
+            note=(f'{int(r.test_hours or 24)}h / {int(r.test_mb or 200)}MB' if test else
+                  (f'{data_gb:g} GB' if data_gb else '')))
+    try:
+        logpanel_action('reseller_peer_create', f'reseller={r.username}; pid={peer.id}; months={months}; cost={cost}')
+    except Exception:
+        pass
+    _token_, url = _shortlink_for_peer(peer)
+    return jsonify(ok=True, id=peer.id, name=peer.name, link=url or '', cost=cost,
+                   balance=int(db.session.get(Reseller, r.id).balance or 0))
+
+
+@app.post('/api/agent/peer/<int:pid>/renew')
+@reseller_required
+def agent_renew_peer(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    data = request.get_json(silent=True) or {}
+    try:
+        months = int(data.get('months') or 1)
+    except (TypeError, ValueError):
+        months = 0
+    if months not in _RS_MONTHS:
+        return jsonify(ok=False, error='invalid_months'), 400
+    cost = int(r.price_per_month or 0) * months
+    if cost > 0 and not _rs_take(r, cost):
+        return jsonify(ok=False, error='low_balance',
+                       detail=f'موجودی کافی نیست. هزینه: {cost:,} تومان، موجودی: {int(r.balance or 0):,} تومان'), 402
+    add = 30.0 * months
+    try:
+        started = _timer_anchor_ts(p) is not None
+    except Exception:
+        started = True
+    if started:
+        exp = _effective_expiry_ts(p) or now_ts()
+        remaining = max(0.0, (exp - now_ts()) / 86400.0)
+        payload = {'time_limit_days': round(remaining + add, 6), 'renew': True}
+    else:
+        payload = {'time_limit_days': float(p.time_limit_days or 0) + add}
+    # a renewal is a new period: traffic starts from zero
+    if p.data_limit_value:
+        try:
+            _wg_dump_invalidate()
+            p.bytes_offset = max(0, int(_wg_transfer(p) or 0))
+        except Exception:
+            pass
+        p.used_bytes_total = 0
+        db.session.commit()
+    try:
+        code, body = _rs_internal(api_edit, f'/api/peer/{p.id}', payload, method='PUT', pid=p.id)
+    except Exception as exc:
+        current_app.logger.exception('reseller renew failed')
+        code, body = 500, {'detail': str(exc)}
+    if code >= 400 or (isinstance(body, dict) and body.get('ok') is False and body.get('success') is not True):
+        db.session.rollback()
+        if cost > 0:
+            _rs_give(r, cost)
+        return jsonify(ok=False, error='renew_failed',
+                       detail=(body or {}).get('detail') or 'تمدید انجام نشد؛ هزینه برگشت داده شد'), 502
+    p = db.session.get(Peer, pid)
+    try:
+        log_event(p, 'reseller_renewed', f'reseller={r.username}; months={months}; cost={cost}')
+    except Exception:
+        pass
+    _rs_txn(r, 'renew', -cost, peer=p, months=months)
+    try:
+        logpanel_action('reseller_peer_renew', f'reseller={r.username}; pid={p.id}; months={months}; cost={cost}')
+    except Exception:
+        pass
+    return jsonify(ok=True, cost=cost, balance=int(db.session.get(Reseller, r.id).balance or 0),
+                   expires_at=_effective_expiry_ts(p))
+
+
+@app.post('/api/agent/peer/<int:pid>/toggle')
+@reseller_required
+def agent_toggle_peer(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    want = (request.get_json(silent=True) or {}).get('enable')
+    want = str(want).strip().lower() in ('1', 'true', 'yes', 'on')
+    if want:
+        if not (p.status == 'offline' and _rs_last_flag_event(p) == 'reseller_disabled'):
+            return jsonify(ok=False, error='not_allowed',
+                           detail='این کاربر توسط مدیر یا سیستم غیرفعال شده و فقط مدیر می‌تواند فعالش کند'), 403
+        code, body = _rs_internal(api_enable, f'/api/peer/{p.id}/enable', {'reset': False}, pid=p.id)
+    else:
+        if p.status != 'online':
+            return jsonify(ok=False, error='not_active', detail='کاربر فعال نیست'), 409
+        code, body = _rs_internal(api_disable, f'/api/peer/{p.id}/disable', {}, pid=p.id)
+        if code < 400:
+            try:
+                log_event(db.session.get(Peer, pid), 'reseller_disabled', f'by reseller {r.username}')
+            except Exception:
+                pass
+    if code >= 400:
+        return jsonify(ok=False, error=(body or {}).get('error') or 'failed', detail=(body or {}).get('detail') or ''), 502
+    return jsonify(ok=True, status=db.session.get(Peer, pid).status)
+
+
+@app.delete('/api/agent/peer/<int:pid>')
+@reseller_required
+def agent_delete_peer(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    name = p.name
+    refund = 0
+    try:
+        used = _accumulate_peer_usage(p)[0]
+    except Exception:
+        used = int(p.used_bytes_total or 0)
+    fresh = (now_ts() - (to_ts(p.created_at) or 0)) <= _RS_REFUND_HOURS * 3600
+    if fresh and not used and not p.first_used_at:
+        spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
+                 .filter(ResellerTxn.reseller_id == r.id, ResellerTxn.peer_id == p.id,
+                         ResellerTxn.kind.in_(('create', 'renew', 'refund'))).scalar()) or 0
+        refund = max(0, -int(spent))
+    code, body = _rs_internal(api_delete, f'/api/peer/{p.id}', {}, method='DELETE', pid=p.id)
+    if code >= 400:
+        return jsonify(ok=False, error=(body or {}).get('error') or 'delete_failed',
+                       detail=(body or {}).get('detail') or ''), 502
+    if refund:
+        _rs_give(r, refund)
+        t = _rs_txn(r, 'refund', refund, note=f'deleted unused {name}')
+        t.peer_id, t.peer_name = pid, name
+        db.session.commit()
+    try:
+        logpanel_action('reseller_peer_delete', f'reseller={r.username}; pid={pid}; name={name}; refund={refund}')
+    except Exception:
+        pass
+    return jsonify(ok=True, refund=refund, balance=int(db.session.get(Reseller, r.id).balance or 0))
+
+
+@app.get('/api/agent/peer/<int:pid>/config')
+@reseller_required
+def agent_peer_config(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    txt, err = _peer_client_conf_or_502(p)
+    if err is not None:
+        return err
+    resp = make_response(txt)
+    resp.mimetype = 'text/plain'
+    safe = re.sub(r'[^A-Za-z0-9_.-]', '_', p.name or 'peer')
+    resp.headers['Content-Disposition'] = f'attachment; filename="{safe}.conf"'
+    return resp
+
+
+# ---------------- admin: manage resellers ----------------
+@app.get('/resellers')
+@login_required
+def resellers_page():
+    return render_template('resellers.html')
+
+
+def _rs_apply_fields(r, data, creating=False):
+    if 'username' in data or creating:
+        u = (data.get('username') or '').strip()
+        if not _RS_NAME_RE.match(u):
+            raise ValueError('Username: 3-32 chars, letters / digits / _ . -')
+        other = Reseller.query.filter(func.lower(Reseller.username) == u.lower()).first()
+        if other and other.id != getattr(r, 'id', None):
+            raise ValueError('Username already exists')
+        r.username = u
+    pw = (data.get('password') or '').strip()
+    if creating and len(pw) < 6:
+        raise ValueError('Password must be at least 6 characters')
+    if pw:
+        if len(pw) < 6:
+            raise ValueError('Password must be at least 6 characters')
+        r.password_hash = Reseller.hash_pw(pw)
+        r.session_ver = int(r.session_ver or 1) + 1
+    for key, lo, hi in (('price_per_month', 0, 10**10), ('max_users', 0, 10**6),
+                        ('test_per_day', 0, 1000), ('test_hours', 1, 24 * 7), ('test_mb', 1, 10**6)):
+        if key in data:
+            try:
+                v = int(float(data.get(key) or 0))
+            except (TypeError, ValueError):
+                raise ValueError(f'{key} must be a number')
+            setattr(r, key, max(lo, min(hi, v)))
+    if 'enabled' in data:
+        en = bool(data.get('enabled'))
+        if not en and r.enabled:
+            r.session_ver = int(r.session_ver or 1) + 1
+        r.enabled = en
+    if 'allow_data_limit' in data:
+        r.allow_data_limit = bool(data.get('allow_data_limit'))
+    if 'note' in data:
+        r.note = (data.get('note') or '').strip()[:255]
+    if 'iface_ids' in data:
+        ids = []
+        for x in (data.get('iface_ids') or []):
+            try:
+                ids.append(int(x))
+            except (TypeError, ValueError):
+                pass
+        valid = {i.id for i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(ids or [-1])).all()
+                 if not getattr(i, 'node_id', None)}
+        r.allowed_ifaces = ','.join(str(i) for i in ids if i in valid)
+
+
+@app.get('/api/resellers')
+@_admin_only
+def api_resellers_list():
+    rows = [_rs_public(r) for r in Reseller.query.order_by(Reseller.id.asc()).all()]
+    ifaces = [{'id': i.id, 'name': i.name} for i in InterfaceConfig.query.order_by(InterfaceConfig.id).all()
+              if not getattr(i, 'node_id', None)]
+    return jsonify(ok=True, resellers=rows, ifaces=ifaces)
+
+
+@app.post('/api/resellers')
+@_admin_only
+def api_resellers_create():
+    data = request.get_json(silent=True) or {}
+    r = Reseller(balance=0, session_ver=1)
+    try:
+        _rs_apply_fields(r, data, creating=True)
+    except ValueError as exc:
+        return jsonify(ok=False, error='invalid', detail=str(exc)), 400
+    db.session.add(r)
+    db.session.commit()
+    _RS_NAME_MEMO['ts'] = 0
+    logpanel_action('reseller_create', f'reseller={r.username}')
+    return jsonify(ok=True, reseller=_rs_public(r))
+
+
+@app.put('/api/resellers/<int:rid>')
+@_admin_only
+def api_resellers_update(rid):
+    r = db.session.get(Reseller, rid) or abort(404)
+    data = request.get_json(silent=True) or {}
+    try:
+        _rs_apply_fields(r, data)
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify(ok=False, error='invalid', detail=str(exc)), 400
+    db.session.commit()
+    _RS_NAME_MEMO['ts'] = 0
+    logpanel_action('reseller_update', f'reseller={r.username}; fields={",".join(sorted(k for k in data if k != "password"))}'
+                    + ('; password changed' if data.get('password') else ''))
+    return jsonify(ok=True, reseller=_rs_public(r))
+
+
+@app.post('/api/resellers/<int:rid>/charge')
+@_admin_only
+def api_resellers_charge(rid):
+    r = db.session.get(Reseller, rid) or abort(404)
+    data = request.get_json(silent=True) or {}
+    try:
+        amount = int(float(str(data.get('amount') or '0').replace(',', '')))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='invalid_amount'), 400
+    if amount == 0:
+        return jsonify(ok=False, error='invalid_amount'), 400
+    _rs_give(r, amount)
+    _rs_txn(r, 'charge' if amount > 0 else 'adjust', amount, actor='admin',
+            note=(data.get('note') or '').strip())
+    logpanel_action('reseller_charge', f'reseller={r.username}; amount={amount}')
+    return jsonify(ok=True, balance=int(db.session.get(Reseller, rid).balance or 0))
+
+
+@app.delete('/api/resellers/<int:rid>')
+@_admin_only
+def api_resellers_delete(rid):
+    """Delete the agent account. Its users stay (they become admin users)."""
+    r = db.session.get(Reseller, rid) or abort(404)
+    name = r.username
+    n = Peer.query.filter(Peer.reseller_id == r.id).update({Peer.reseller_id: None}, synchronize_session=False)
+    db.session.delete(r)
+    db.session.commit()
+    _RS_NAME_MEMO['ts'] = 0
+    logpanel_action('reseller_delete', f'reseller={name}; users_kept={n}')
+    return jsonify(ok=True, users_kept=n)
+
+
+@app.get('/api/resellers/<int:rid>/txns')
+@_admin_only
+def api_resellers_txns(rid):
+    db.session.get(Reseller, rid) or abort(404)
+    rows = (ResellerTxn.query.filter(ResellerTxn.reseller_id == rid)
+            .order_by(ResellerTxn.id.desc()).limit(500).all())
+    return jsonify(ok=True, txns=[_rs_txn_public(t) for t in rows])
+
+
+@app.get('/api/resellers/<int:rid>/peers')
+@_admin_only
+def api_resellers_peers(rid):
+    db.session.get(Reseller, rid) or abort(404)
+    q = Peer.query.filter(Peer.reseller_id == rid)
+    s = (request.args.get('q') or '').strip()
+    if s:
+        q = q.filter(Peer.name.ilike(f'%{s}%'))
+    total = q.count()
+    page = max(1, request.args.get('page', 1, type=int))
+    peers = q.order_by(Peer.id.desc()).offset((page - 1) * 100).limit(100).all()
+    return jsonify(ok=True, total=total, page=page, per=100, peers=_rs_peer_rows(peers))
+
+
+@app.post('/api/resellers/<int:rid>/suspend_users')
+@_admin_only
+def api_resellers_suspend_users(rid):
+    """{"suspend": true} disables every active user of this agent;
+    {"suspend": false} re-enables only the users this action disabled."""
+    r = db.session.get(Reseller, rid) or abort(404)
+    suspend = bool((request.get_json(silent=True) or {}).get('suspend'))
+    done, failed = 0, 0
+    for p in Peer.query.filter(Peer.reseller_id == r.id).all():
+        if suspend:
+            if p.status != 'online':
+                continue
+            code, _b = _rs_internal(api_disable, f'/api/peer/{p.id}/disable', {}, pid=p.id)
+            if code < 400:
+                try:
+                    log_event(db.session.get(Peer, p.id), 'reseller_suspended', f'agent {r.username} suspended by admin')
+                except Exception:
+                    pass
+                done += 1
+            else:
+                failed += 1
+        else:
+            if p.status != 'offline' or _rs_last_flag_event(p) != 'reseller_suspended':
+                continue
+            code, _b = _rs_internal(api_enable, f'/api/peer/{p.id}/enable', {'reset': False}, pid=p.id)
+            if code < 400:
+                done += 1
+            else:
+                failed += 1
+    _wg_dump_invalidate()
+    logpanel_action('reseller_suspend_users', f'reseller={r.username}; suspend={int(suspend)}; done={done}; failed={failed}')
+    return jsonify(ok=not failed, done=done, failed=failed)
+
+
 
 if __name__ == "__main__":
 

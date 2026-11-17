@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block preload_flags %}
+{% set use_poppins_regular = true %}
+{% set use_poppins_semibold = true %}
+{% set use_fa_solid = true %}
+{% endblock %}
+
+{% block head_extras %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/resellers.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="rs-shell">
+  <div class="rs-top">
+    <div>
+      <h1><i class="fas fa-handshake"></i> Resellers</h1>
+      <p>Agents log in at <code id="rs-login-url">/agent</code> with their own username and password. They pay from a prepaid wallet you charge, can only use the interfaces you allow, and only see their own users.</p>
+    </div>
+    <button class="rs-btn primary" id="rs-new" type="button"><i class="fas fa-plus"></i> New reseller</button>
+  </div>
+
+  <div class="rs-card">
+    <div class="rs-table-wrap">
+      <table class="rs-table">
+        <thead>
+          <tr><th>Reseller</th><th>Status</th><th class="r">Wallet</th><th class="r">Price / month</th><th class="r">Users</th><th class="r">Spent 30d</th><th>Last login</th><th></th></tr>
+        </thead>
+        <tbody id="rs-body"><tr><td colspan="8" class="rs-empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="rs-card" id="rs-detail" hidden>
+    <div class="rs-detail-head">
+      <h2 id="rs-detail-title"></h2>
+      <div class="rs-seg">
+        <button type="button" data-view="peers" class="active">Users</button>
+        <button type="button" data-view="txns">Wallet ledger</button>
+      </div>
+      <input id="rs-detail-q" type="search" placeholder="Search user…">
+      <button class="rs-btn" type="button" id="rs-detail-close"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div id="rs-detail-body"></div>
+  </div>
+</div>
+
+<dialog class="rs-dialog" id="rs-form-dialog">
+  <form id="rs-form" method="dialog">
+    <h2 id="rs-form-title">New reseller</h2>
+    <div class="rs-grid">
+      <label>Username<input name="username" required maxlength="32" autocomplete="off"></label>
+      <label>Password <small id="rs-pw-hint"></small><input name="password" type="text" autocomplete="new-password" minlength="6"></label>
+      <label>Price per month (Toman)<input name="price_per_month" type="number" min="0" step="1000" value="0"></label>
+      <label>Max users <small>0 = no limit</small><input name="max_users" type="number" min="0" value="0"></label>
+      <label>Free tests per 24h <small>0 = off</small><input name="test_per_day" type="number" min="0" value="2"></label>
+      <label>Test length (hours)<input name="test_hours" type="number" min="1" value="24"></label>
+      <label>Test traffic (MB)<input name="test_mb" type="number" min="1" value="200"></label>
+      <label>Note<input name="note" maxlength="255"></label>
+    </div>
+    <fieldset class="rs-ifaces"><legend>Allowed interfaces</legend><div id="rs-iface-list"></div></fieldset>
+    <label class="rs-check"><input type="checkbox" name="allow_data_limit" checked> May set a GB limit on users (otherwise users are unlimited traffic)</label>
+    <label class="rs-check"><input type="checkbox" name="enabled" checked> Account enabled (can log in)</label>
+    <p class="rs-error" id="rs-form-error" hidden></p>
+    <footer>
+      <button type="button" class="rs-btn" value="cancel" id="rs-form-cancel">Cancel</button>
+      <button type="submit" class="rs-btn primary" id="rs-form-save">Save</button>
+    </footer>
+  </form>
+</dialog>
+{% endblock %}
+
+{% block body_extras %}
+<script defer src="{{ url_for('static', filename='js/resellers.js') }}"></script>
+{% endblock %}

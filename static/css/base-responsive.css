@@ -299,3 +299,13 @@
 .sb2-edge-toggle[hidden] { display: none !important; }
 html[data-design=modern][data-theme=light] .sb2-edge-toggle { background: #fff; color: #334155; border-color: #dce3ea; }
 @media (max-width: 760px) { .sb2-edge-toggle { display: none !important; } }
+
+/* Sidebar: keep the bottom controls (update, account, theme, design,
+   collapse, language) right under the menu instead of pinned to the far
+   bottom of a tall screen. The menu still scrolls when space is short. */
+html body #panel-sidebar.sb2 nav {
+  flex: 0 1 auto !important;
+}
+html body #panel-sidebar.sb2 .sb2-bottom {
+  margin-top: 8px !important;
+}

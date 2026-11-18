@@ -38,22 +38,19 @@
     btn.innerHTML =
       '<i class="fas fa-language" aria-hidden="true"></i><span>' + (lang === "fa" ? "English" : "فارسی") + "</span>";
     btn.addEventListener("click", () => setLang(lang === "fa" ? "en" : "fa"));
-    const top = document.querySelector(".nx-topbar");
-    const mobile = document.getElementById("wg-mobile-topbar");
-    if (top && top.offsetParent !== null) {
-      top.appendChild(btn);
+    // Inside the sidebar (above the Modern/Legacy switch); login pages keep
+    // a small floating button.
+    const design = document.querySelector("#panel-sidebar .design-switch");
+    const bottom = document.querySelector("#panel-sidebar .sb2-bottom");
+    if (design && design.parentNode) {
+      btn.classList.add("in-sidebar");
+      design.parentNode.insertBefore(btn, design);
+    } else if (bottom) {
+      btn.classList.add("in-sidebar");
+      bottom.appendChild(btn);
     } else {
       btn.classList.add("floating");
       document.body.appendChild(btn);
-    }
-    if (mobile) {
-      const m = btn.cloneNode(true);
-      m.id = "wgp-lang-toggle-m";
-      m.classList.remove("floating");
-      m.classList.add("mobile");
-      m.addEventListener("click", () => setLang(lang === "fa" ? "en" : "fa"));
-      mobile.appendChild(m);
-      document.documentElement.classList.add("has-m-lang");
     }
   }
 
@@ -64,10 +61,9 @@
     ".wgp-lang-toggle:hover{background:rgba(148,163,184,.15)}" +
     ".wgp-lang-toggle.floating{position:fixed;top:12px;right:16px;z-index:1500;background:#fff;color:#1b2230;box-shadow:0 2px 10px rgba(0,0,0,.12)}" +
     "html[data-theme=dark] .wgp-lang-toggle.floating{background:#171c25;color:#e6e9ef}" +
-    ".wgp-lang-toggle.mobile{margin-left:auto;color:#e6eef5}" +
-    "@media (max-width:760px){html.has-m-lang .wgp-lang-toggle.floating{display:none}}" +
-    "@media (min-width:761px){.wgp-lang-toggle.mobile{display:none}}" +
-    "html[data-design=modern] .wgp-lang-toggle.mobile{color:inherit}" +
+    ".wgp-lang-toggle.in-sidebar{display:flex;width:100%;justify-content:center;margin:6px 0;border-radius:10px;height:34px}" +
+    ".sb2.is-collapsed .wgp-lang-toggle.in-sidebar{width:48px;margin:6px auto;padding:0}" +
+    ".sb2.is-collapsed .wgp-lang-toggle.in-sidebar span{display:none}" +
     "html.lang-fa body{font-family:Vazirmatn,Tahoma,'Segoe UI',system-ui,sans-serif}" +
     "html.i18n-pending body{visibility:hidden}";
   document.head.appendChild(css);

@@ -210,6 +210,7 @@ class Reseller(db.Model):
     balance         = db.Column(BigInteger, default=0, nullable=False)       # Toman
     price_per_month = db.Column(BigInteger, default=0, nullable=False)       # Toman per 30 days
     price_per_gb    = db.Column(BigInteger, default=0, nullable=False)       # Toman per GB (0 = unlimited traffic)
+    extra_month_price = db.Column(BigInteger, default=0, nullable=False)     # volume users: each month after the first
     api_key_hash    = db.Column(db.String(64), index=True)                   # sha256 of the agent API key
     api_key_hint    = db.Column(db.String(16))                               # last characters, for display
     max_users       = db.Column(db.Integer, default=0, nullable=False)       # 0 = no limit

@@ -82,7 +82,12 @@
 
   function costNow() {
     if (!ME) return 0;
-    return (ME.price_per_month || 0) * Number($("#c-months").value || 1) + Math.round((ME.price_per_gb || 0) * Number($("#c-data").value || 0));
+    return priceFor(Number($("#c-months").value || 1), Number($("#c-data").value || 0));
+  }
+
+  function priceFor(months, gb) {
+    if (gb > 0 && ME.price_per_gb > 0) return Math.round(ME.price_per_gb * gb) + Math.max(0, months - 1) * (ME.extra_month_price || 0);
+    return (ME.price_per_month || 0) * months;
   }
 
   function renderMe() {
@@ -90,15 +95,20 @@
     $("#ag-adminview").hidden = !ME.admin_view;
     $("#ag-balance").textContent = toman(ME.balance);
     $("#st-price").textContent =
-      (ME.price_per_month ? toman(ME.price_per_month) + " / ماه" : "") +
-      (ME.price_per_gb ? (ME.price_per_month ? " + " : "") + toman(ME.price_per_gb) + " / گیگ" : "") || "رایگان";
+      [
+        ME.price_per_month ? toman(ME.price_per_month) + " / ماه (نامحدود)" : "",
+        ME.price_per_gb ? toman(ME.price_per_gb) + " / گیگ" + (ME.extra_month_price ? " · هر ماه اضافه " + toman(ME.extra_month_price) : "") : "",
+      ].filter(Boolean).join(" · ") || "رایگان";
     $("#st-users").textContent = fa(ME.users) + (ME.max_users ? " / " + fa(ME.max_users) : "");
     $("#st-tests").textContent = ME.test_per_day ? fa(ME.tests_used_24h) + " / " + fa(ME.test_per_day) : "غیرفعال";
     $("#st-spent").textContent = toman(ME.spent_30d);
     $("#c-test").hidden = !ME.test_per_day;
     $("#c-data-wrap").hidden = !(ME.allow_data_limit || ME.price_per_gb);
-    $("#c-data-hint").textContent = ME.price_per_gb ? "اجباری · " + toman(ME.price_per_gb) + " هر گیگ" : "۰ = نامحدود";
-    $("#c-data").min = ME.price_per_gb ? "1" : "0";
+    const gbRequired = ME.price_per_gb && !ME.price_per_month;
+    $("#c-data-hint").textContent = ME.price_per_gb
+      ? (gbRequired ? "اجباری · " : "۰ = نامحدود ماهانه · ") + toman(ME.price_per_gb) + " هر گیگ"
+      : "۰ = نامحدود";
+    $("#c-data").min = gbRequired ? "1" : "0";
     $("#api-state").textContent = ME.has_api_key ? "…" + ME.api_key_hint : "ندارد";
     $("#api-base").textContent = location.origin;
     const ifs = $("#c-iface");
@@ -108,7 +118,8 @@
     }
     $("#c-iface-wrap").hidden = ME.ifaces.length <= 1;
     $("#c-cost").textContent = toman(costNow());
-    $("#ag-low").hidden = !((ME.price_per_month > 0 || ME.price_per_gb > 0) && ME.balance < (ME.price_per_month || 0) + (ME.price_per_gb || 0));
+    const cheapest = [ME.price_per_month, ME.price_per_gb].filter((x) => x > 0);
+    $("#ag-low").hidden = !(cheapest.length && ME.balance < Math.min(...cheapest));
     $("#c-submit").disabled = !ME.ifaces.length;
   }
 
@@ -267,7 +278,7 @@
           options: ME.months.map((x) => ({ value: x, label: MONTH_LABEL(x) })),
           number: withGb ? { label: ME.price_per_gb ? "حجم دورهٔ جدید (گیگ)" : "حجم (گیگ) · ۰ = نامحدود", value: curGb || (ME.price_per_gb ? 10 : 0) } : null,
           onChange: (v) => {
-            const cost = (ME.price_per_month || 0) * Number(v.select || 1) + Math.round((ME.price_per_gb || 0) * (withGb ? v.number : 0));
+            const cost = priceFor(Number(v.select || 1), withGb ? v.number : 0);
             $("#d-body").textContent = baseBody + "\nهزینه: " + toman(cost);
           },
           okText: "تمدید",

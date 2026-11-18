@@ -5,9 +5,11 @@ The built-in updater, installer and `wgpanel` CLI pull from this repository
 
 ## 2026-11-18 — reseller GB price and agent API
 
-- Resellers: new **Price per GB**. 0 = monthly unlimited (as before). When it
-  is above 0 the agent must give a GB amount and pays months × price/month +
-  GB × price/GB, on create and on renew (renew can set a new GB amount).
+- Resellers: new **Price per GB** (0 = monthly unlimited, as before) and
+  optional **Extra month for GB users**. Volume user: GB × price/GB covers the
+  first month, each further month costs the extra-month price (0 = free).
+  Unlimited user: months × price/month. If price/month is 0 and price/GB is
+  set, a GB amount is required. Same rules on renew (renew can set new GB).
 - Agent API: each agent gets an API key (admin: Resellers → API, or the agent
   itself: API tab in /agent). Header `X-Agent-Key: rsk_…` on `/api/agent/*`
   lets the agent's own bot create / renew / disable / delete its users and

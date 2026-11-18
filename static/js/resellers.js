@@ -44,7 +44,7 @@
           <td data-label="Reseller"><div class="rs-name">${esc(r.username)}</div><div class="rs-sub">${esc(ifaceNames(r.iface_ids))}${r.note ? " · " + esc(r.note) : ""}</div></td>
           <td data-label="Status">${r.enabled ? '<span class="rs-badge ok">Active</span>' : '<span class="rs-badge bad">Disabled</span>'}</td>
           <td class="r" data-label="Wallet">${num(r.balance)}${low ? ' <span class="rs-badge warn">low</span>' : ""}</td>
-          <td class="r" data-label="Price / month">${num(r.price_per_month)}${r.price_per_gb ? `<div class="rs-sub">+ ${num(r.price_per_gb)} / GB</div>` : '<div class="rs-sub">unlimited GB</div>'}</td>
+          <td class="r" data-label="Price / month">${num(r.price_per_month)}${r.price_per_gb ? `<div class="rs-sub">${num(r.price_per_gb)} / GB${r.extra_month_price ? ` · +${num(r.extra_month_price)} / extra month` : ""}</div>` : '<div class="rs-sub">unlimited GB</div>'}</td>
           <td class="r" data-label="Users">${num(r.users)}${r.max_users ? " / " + num(r.max_users) : ""}<div class="rs-sub">${num(r.users_online_status)} active</div></td>
           <td class="r" data-label="Spent 30d">${num(r.spent_30d)}</td>
           <td data-label="Last login"><span class="rs-sub">${when(r.last_login_at)}</span></td>
@@ -76,8 +76,8 @@
     $("#rs-form-title").textContent = r ? `Edit ${r.username}` : "New reseller";
     $("#rs-pw-hint").textContent = r ? "(leave empty to keep)" : "(min 6)";
     f.password.required = !r;
-    const v = r || { price_per_month: 0, price_per_gb: 0, max_users: 0, test_per_day: 2, test_hours: 24, test_mb: 200, allow_data_limit: true, enabled: true, iface_ids: [] };
-    for (const k of ["username", "price_per_month", "price_per_gb", "max_users", "test_per_day", "test_hours", "test_mb", "note"]) {
+    const v = r || { price_per_month: 0, price_per_gb: 0, extra_month_price: 0, max_users: 0, test_per_day: 2, test_hours: 24, test_mb: 200, allow_data_limit: true, enabled: true, iface_ids: [] };
+    for (const k of ["username", "price_per_month", "price_per_gb", "extra_month_price", "max_users", "test_per_day", "test_hours", "test_mb", "note"]) {
       if (v[k] !== undefined) f[k].value = v[k];
     }
     f.allow_data_limit.checked = !!v.allow_data_limit;
@@ -98,6 +98,7 @@
       username: f.username.value.trim(),
       price_per_month: Number(f.price_per_month.value || 0),
       price_per_gb: Number(f.price_per_gb.value || 0),
+      extra_month_price: Number(f.extra_month_price.value || 0),
       max_users: Number(f.max_users.value || 0),
       test_per_day: Number(f.test_per_day.value || 0),
       test_hours: Number(f.test_hours.value || 24),

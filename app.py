@@ -271,6 +271,8 @@ def _peer_schema():
             statements.append('ALTER TABLE reseller ADD COLUMN price_per_gb BIGINT NOT NULL DEFAULT 0')
         if 'api_key_hash' not in rs_cols:
             statements.append('ALTER TABLE reseller ADD COLUMN api_key_hash VARCHAR(64)')
+        if 'extra_month_price' not in rs_cols:
+            statements.append('ALTER TABLE reseller ADD COLUMN extra_month_price BIGINT NOT NULL DEFAULT 0')
         if 'api_key_hint' not in rs_cols:
             statements.append('ALTER TABLE reseller ADD COLUMN api_key_hint VARCHAR(16)')
 
@@ -34586,6 +34588,7 @@ def _rs_public(r, with_stats=True):
         'id': r.id, 'username': r.username, 'enabled': bool(r.enabled),
         'balance': int(r.balance or 0), 'price_per_month': int(r.price_per_month or 0),
         'price_per_gb': int(r.price_per_gb or 0),
+        'extra_month_price': int(r.extra_month_price or 0),
         'has_api_key': bool(r.api_key_hash), 'api_key_hint': r.api_key_hint or '',
         'max_users': int(r.max_users or 0), 'iface_ids': r.iface_ids(),
         'test_per_day': int(r.test_per_day or 0), 'test_hours': int(r.test_hours or 0),
@@ -34607,8 +34610,15 @@ def _rs_public(r, with_stats=True):
 
 
 def _rs_price(r, months, data_gb):
-    """Wallet cost: months x price/month + GB x price/GB."""
-    return int(r.price_per_month or 0) * int(months or 0) + int(round(float(r.price_per_gb or 0) * float(data_gb or 0)))
+    """Wallet cost.
+    Volume user (GB > 0 and a price per GB is set): GB x price/GB covers the
+    first month; each extra month costs extra_month_price (0 = free).
+    Otherwise (unlimited traffic, or no GB price): months x price/month."""
+    months = int(months or 0)
+    gb = float(data_gb or 0)
+    if gb > 0 and int(r.price_per_gb or 0) > 0:
+        return int(round(float(r.price_per_gb) * gb)) + max(0, months - 1) * int(r.extra_month_price or 0)
+    return int(r.price_per_month or 0) * months
 
 
 def _rs_read_gb(r, data, required):
@@ -34619,7 +34629,7 @@ def _rs_read_gb(r, data, required):
     except (TypeError, ValueError):
         raise ValueError('حجم نامعتبر است')
     gb = max(0.0, min(10000.0, gb))
-    if r.price_per_gb and required and gb <= 0:
+    if r.price_per_gb and not r.price_per_month and required and gb <= 0:
         raise ValueError('حجم (گیگ) را وارد کنید')
     if not r.price_per_gb and not r.allow_data_limit:
         gb = 0.0
@@ -35043,7 +35053,7 @@ def _rs_apply_fields(r, data, creating=False):
             raise ValueError('Password must be at least 6 characters')
         r.password_hash = Reseller.hash_pw(pw)
         r.session_ver = int(r.session_ver or 1) + 1
-    for key, lo, hi in (('price_per_month', 0, 10**10), ('price_per_gb', 0, 10**9), ('max_users', 0, 10**6),
+    for key, lo, hi in (('price_per_month', 0, 10**10), ('price_per_gb', 0, 10**9), ('extra_month_price', 0, 10**10), ('max_users', 0, 10**6),
                         ('test_per_day', 0, 1000), ('test_hours', 1, 24 * 7), ('test_mb', 1, 10**6)):
         if key in data:
             try:

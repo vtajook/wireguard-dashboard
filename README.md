@@ -2,28 +2,25 @@
 
 وایرگارد داشبورد — پنل مدیریت وایرگارد
 
-## نصب سریع
+## نصب
 
 <div dir="rtl" align="right">
 
-روی سرور Ubuntu/Debian با کاربر root این یک خط را بزنید. منوی نصب باز می‌شود؛ گزینهٔ <b>install everything</b> پیش‌نیازها را نصب، پروژه را از همین گیت‌هاب دریافت و سرویس پنل را راه‌اندازی می‌کند:
+روی سرور تازهٔ Ubuntu/Debian با کاربر root این یک خط را بزنید. همه‌چیز خودکار نصب می‌شود (پکیج‌ها، پنل در <code>/opt/WG_Panel</code>، محیط پایتون، کلیدهای امنیتی، سرویس <code>wg-panel</code> و IP forwarding) و در پایان آدرس ورود و توکن ثبت‌نام اولین ادمین نمایش داده می‌شود:
 
 </div>
 
 ```
-sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/wg.sh)"'
+bash <(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/main/install.sh)
 ```
 
 <div dir="rtl" align="right">
 
-<b>آپدیت:</b> از داخل پنل ← <b>Update Center</b> (کاربران قطع نمی‌شوند). اجرای دوبارهٔ همین دستور هم منو را برای آپدیت/تعمیر باز می‌کند.<br>
-<b>نصب نود (سرور دوم):</b>
+پورت پیش‌فرض پنل ۵۰۸۱ است. برای پورت دیگر: <code>PANEL_PORT=2053 bash &lt;(curl -fsSL …/install.sh)</code><br>
+بعد از نصب: <code>http://IP:5081/register</code> ← ساخت ادمین (توکن ثبت‌نام در خروجی نصب) ← ساخت اینترفیس از صفحهٔ کاربران ← تنظیم دامنهٔ کانفیگ در تنظیمات ← اینترفیس ← اندپوینت کلاینت ← فعال کردن HTTPS در تنظیمات ← پنل.<br>
+<b>آپدیت:</b> از داخل پنل ← <b>Update Center</b> (کاربران قطع نمی‌شوند). اجرای دوبارهٔ همین دستور روی پنل نصب‌شده هم فقط کد را آپدیت می‌کند و دیتابیس، .env و کانفیگ‌ها دست نمی‌خورند.
 
 </div>
-
-```
-sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/agent/node.sh)"'
-```
 
 ---
 

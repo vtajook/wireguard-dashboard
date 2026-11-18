@@ -40,7 +40,7 @@
     btn.addEventListener("click", () => setLang(lang === "fa" ? "en" : "fa"));
     const top = document.querySelector(".nx-topbar");
     const mobile = document.getElementById("wg-mobile-topbar");
-    if (top) {
+    if (top && top.offsetParent !== null) {
       top.appendChild(btn);
     } else {
       btn.classList.add("floating");
@@ -64,6 +64,8 @@
     ".wgp-lang-toggle.floating{position:fixed;top:12px;right:16px;z-index:1500;background:#fff;color:#1b2230;box-shadow:0 2px 10px rgba(0,0,0,.12)}" +
     "html[data-theme=dark] .wgp-lang-toggle.floating{background:#171c25;color:#e6e9ef}" +
     ".wgp-lang-toggle.mobile{margin-left:auto;color:#e6eef5}" +
+    "@media (max-width:760px){.wgp-lang-toggle.floating{display:none}}" +
+    "@media (min-width:761px){.wgp-lang-toggle.mobile{display:none}}" +
     "html[data-design=modern] .wgp-lang-toggle.mobile{color:inherit}" +
     "html.lang-fa body{font-family:Vazirmatn,Tahoma,'Segoe UI',system-ui,sans-serif}" +
     "html.i18n-pending body{visibility:hidden}";

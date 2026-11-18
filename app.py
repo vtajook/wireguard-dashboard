@@ -34783,6 +34783,25 @@ def _rs_read_gb(r, data, required):
     return gb
 
 
+def _rs_client_endpoint(iface):
+    """Endpoint written into configs made by an agent. The interface's saved
+    endpoint (Settings) wins; otherwise copy the endpoint most peers of this
+    interface already use (what the admin / bot sets, e.g. a domain), so an
+    agent's users never get the bare server IP."""
+    try:
+        if iface_endpoint_override(iface):
+            return ''
+    except Exception:
+        pass
+    try:
+        row = (db.session.query(Peer.endpoint, func.count(Peer.id))
+               .filter(Peer.iface_id == iface.id, Peer.endpoint.isnot(None), Peer.endpoint != '')
+               .group_by(Peer.endpoint).order_by(func.count(Peer.id).desc()).first())
+        return (row[0] or '').strip() if row else ''
+    except Exception:
+        return ''
+
+
 def _rs_tests_last_24h(r):
     since = datetime.utcnow() - timedelta(hours=24)
     return ResellerTxn.query.filter(ResellerTxn.reseller_id == r.id, ResellerTxn.kind == 'test',
@@ -35038,6 +35057,9 @@ def agent_create_peer():
         'time_limit_days': days, 'start_on_first_use': bool(first_use and not test),
         'unlimited': False,
     }
+    ep = _rs_client_endpoint(iface)
+    if ep:
+        payload['endpoint'] = ep
     payload.update(payload_limit)
     try:
         code, body = _rs_internal(peers_create, '/api/peers', payload)

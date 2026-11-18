@@ -20046,6 +20046,28 @@ def login():
                 password
             )
         ):
+            # Same login page for resellers: an agent username/password
+            # opens the agent panel instead of failing.
+            if not account and username:
+                try:
+                    _rs = Reseller.query.filter(func.lower(Reseller.username) == username.lower()).first()
+                except Exception:
+                    _rs = None
+                if _rs is not None and _rs.verify_pw(password):
+                    if not _rs.enabled:
+                        flash('حساب نمایندگی شما غیرفعال است', 'error')
+                        return render_template('login.html')
+                    session['rs_id'] = _rs.id
+                    session['rs_ver'] = int(_rs.session_ver or 1)
+                    session.pop('rs_admin_view', None)
+                    session.permanent = True
+                    _rs.last_login_at = datetime.utcnow()
+                    db.session.commit()
+                    try:
+                        logpanel_action('reseller_login', f'reseller={_rs.username}; via=/login')
+                    except Exception:
+                        pass
+                    return redirect('/agent')
             _send_security_notification(
                 'login_failed',
                 username=(

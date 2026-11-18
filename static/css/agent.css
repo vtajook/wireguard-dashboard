@@ -160,3 +160,9 @@ input, select, button { font: inherit; color: inherit; }
 
 .ag-adminview { background: var(--ag-warn-bg); color: var(--ag-warn); padding: 10px 20px; font-size: 13px; text-align: center; }
 .ag-adminview a { color: inherit; font-weight: 700; }
+
+.ag-dlg-num { display: grid; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--ag-muted); }
+.ag-dlg-num input { height: 38px; padding: 0 10px; border: 1px solid var(--ag-line); border-radius: 8px; background: var(--ag-bg); color: var(--ag-text); }
+.ag-api-doc { margin-top: 14px; font-size: 12px; }
+.ag-api-doc pre { background: var(--ag-soft); padding: 12px; border-radius: 10px; overflow-x: auto; line-height: 1.7; }
+.ag-api-doc code { background: var(--ag-soft); padding: 1px 6px; border-radius: 5px; }

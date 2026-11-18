@@ -209,6 +209,9 @@ class Reseller(db.Model):
     enabled         = db.Column(db.Boolean, default=True, nullable=False)
     balance         = db.Column(BigInteger, default=0, nullable=False)       # Toman
     price_per_month = db.Column(BigInteger, default=0, nullable=False)       # Toman per 30 days
+    price_per_gb    = db.Column(BigInteger, default=0, nullable=False)       # Toman per GB (0 = unlimited traffic)
+    api_key_hash    = db.Column(db.String(64), index=True)                   # sha256 of the agent API key
+    api_key_hint    = db.Column(db.String(16))                               # last characters, for display
     max_users       = db.Column(db.Integer, default=0, nullable=False)       # 0 = no limit
     allowed_ifaces  = db.Column(db.Text, default='')                         # comma separated interface ids
     test_per_day    = db.Column(db.Integer, default=2, nullable=False)       # free test accounts per day (0 = none)

@@ -3,6 +3,19 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — reseller GB price and agent API
+
+- Resellers: new **Price per GB**. 0 = monthly unlimited (as before). When it
+  is above 0 the agent must give a GB amount and pays months × price/month +
+  GB × price/GB, on create and on renew (renew can set a new GB amount).
+- Agent API: each agent gets an API key (admin: Resellers → API, or the agent
+  itself: API tab in /agent). Header `X-Agent-Key: rsk_…` on `/api/agent/*`
+  lets the agent's own bot create / renew / disable / delete its users and
+  read links and configs, paid from the same wallet. New: `GET
+  /api/agent/peer/<id>`, `GET /api/agent/peer/by-name/<name>`.
+- The admin login page also accepts reseller credentials and opens /agent;
+  admin "Login as" opens a reseller's panel.
+
 ## 2026-11-18 — Persian (فارسی) language
 
 - New **فارسی / English** button in the top bar (and the mobile top bar).

@@ -22,7 +22,7 @@
   <div id="ag-adminview" class="ag-adminview" hidden>شما (مدیر) پنل این نماینده را می‌بینید. هر کاری اینجا بکنید از کیف پول همین نماینده حساب می‌شود. <a href="/agent/logout">بازگشت به پنل مدیر</a></div>
   <main class="ag-main">
     <section class="ag-stats" aria-label="خلاصه">
-      <div class="ag-stat"><span>قیمت هر ماه</span><strong id="st-price">…</strong></div>
+      <div class="ag-stat"><span>قیمت</span><strong id="st-price">…</strong></div>
       <div class="ag-stat"><span>کاربران</span><strong id="st-users">…</strong></div>
       <div class="ag-stat"><span>تست ۲۴ ساعت اخیر</span><strong id="st-tests">…</strong></div>
       <div class="ag-stat"><span>هزینه ۳۰ روز اخیر</span><strong id="st-spent">…</strong></div>
@@ -36,7 +36,7 @@
         <label>نام کاربر<input id="c-name" required dir="ltr" maxlength="32" placeholder="ali_123"></label>
         <label id="c-iface-wrap">سرور<select id="c-iface"></select></label>
         <label>مدت<select id="c-months"></select></label>
-        <label id="c-data-wrap">حجم (گیگ)<input id="c-data" type="number" min="0" step="1" value="0" dir="ltr"><small>۰ = نامحدود</small></label>
+        <label id="c-data-wrap">حجم (گیگ)<input id="c-data" type="number" min="0" step="1" value="0" dir="ltr"><small id="c-data-hint">۰ = نامحدود</small></label>
         <label class="ag-check"><input id="c-first" type="checkbox" checked><span>زمان از اولین اتصال شروع شود</span></label>
         <div class="ag-form-foot">
           <span class="ag-cost">هزینه: <strong id="c-cost">…</strong></span>
@@ -50,6 +50,7 @@
     <nav class="ag-tabs" role="tablist">
       <button class="active" data-tab="users" role="tab">کاربران من</button>
       <button data-tab="txns" role="tab">تراکنش‌ها</button>
+      <button data-tab="api" role="tab">API ربات</button>
     </nav>
 
     <section class="ag-card" id="tab-users">
@@ -64,6 +65,33 @@
     <section class="ag-card" id="tab-txns" hidden>
       <div id="t-list" class="ag-list"></div>
     </section>
+
+    <section class="ag-card" id="tab-api" hidden>
+      <h2>اتصال ربات به پنل</h2>
+      <p class="ag-muted">با کلید API، ربات شما می‌تواند مستقیم کاربر بسازد، تمدید کند و لینک و کانفیگ بگیرد. هزینه‌ها مثل همین پنل از کیف پول شما کم می‌شود.</p>
+      <div class="ag-result" style="background:var(--ag-soft)">
+        <span>کلید فعلی: <strong id="api-state">—</strong></span>
+        <button class="ag-btn primary sm" type="button" id="api-new">ساخت کلید جدید</button>
+        <button class="ag-btn sm danger" type="button" id="api-revoke">حذف کلید</button>
+      </div>
+      <div id="api-key-box" class="ag-result" hidden></div>
+      <div class="ag-api-doc" dir="ltr">
+        <p>Header on every request: <code>X-Agent-Key: YOUR_KEY</code> &nbsp; Base: <code id="api-base"></code></p>
+        <pre>GET    /api/agent/me                      → balance, prices, servers (ifaces), months
+GET    /api/agent/peers?q=NAME&amp;page=1         → your users
+GET    /api/agent/peer/by-name/NAME           → one user (status, expires_at, used, link)
+GET    /api/agent/peer/ID                     → one user
+POST   /api/agent/peers                       → create
+       {"name":"ali_1","months":1,"data_gb":0,"iface_id":1,"start_on_first_use":true}
+       {"name":"test_1","test":true}          → free test account
+       ← {"ok":true,"id":12,"link":"https://…","cost":…,"balance":…}
+POST   /api/agent/peer/ID/renew               → {"months":1,"data_gb":50}
+POST   /api/agent/peer/ID/toggle              → {"enable":false}
+DELETE /api/agent/peer/ID
+GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>
+        <p>Errors: <code>{"ok":false,"error":"low_balance","detail":"…"}</code> (HTTP 4xx).</p>
+      </div>
+    </section>
   </main>
 
   <dialog id="ag-dialog" class="ag-dialog">
@@ -71,6 +99,7 @@
       <h3 id="d-title"></h3>
       <p id="d-body"></p>
       <select id="d-select" hidden></select>
+      <label id="d-num-wrap" class="ag-dlg-num" hidden><span id="d-num-label"></span><input id="d-num" type="number" min="0" step="1" dir="ltr"></label>
       <footer><button value="cancel" class="ag-btn ghost">انصراف</button><button value="ok" class="ag-btn primary" id="d-ok">تأیید</button></footer>
     </form>
   </dialog>

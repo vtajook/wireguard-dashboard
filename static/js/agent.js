@@ -33,16 +33,35 @@
     return j;
   }
 
-  function ask({ title, body, options, okText }) {
+  function ask({ title, body, options, okText, number, onChange }) {
     const d = $("#ag-dialog");
     $("#d-title").textContent = title;
     $("#d-body").textContent = body || "";
     const sel = $("#d-select");
     sel.hidden = !options;
     sel.innerHTML = (options || []).map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+    const numWrap = $("#d-num-wrap");
+    const num = $("#d-num");
+    numWrap.hidden = !number;
+    if (number) {
+      $("#d-num-label").textContent = number.label;
+      num.value = number.value ?? 0;
+    }
     $("#d-ok").textContent = okText || "تأیید";
+    const upd = () => onChange && onChange({ select: sel.value, number: Number(num.value || 0) });
+    sel.onchange = upd;
+    num.oninput = upd;
+    upd();
     return new Promise((res) => {
-      d.addEventListener("close", () => res(d.returnValue === "ok" ? (options ? sel.value : true) : null), { once: true });
+      d.addEventListener(
+        "close",
+        () => {
+          if (d.returnValue !== "ok") return res(null);
+          if (number) return res({ select: sel.value, number: Number(num.value || 0) });
+          res(options ? sel.value : true);
+        },
+        { once: true },
+      );
       d.showModal();
     });
   }
@@ -63,19 +82,25 @@
 
   function costNow() {
     if (!ME) return 0;
-    return (ME.price_per_month || 0) * Number($("#c-months").value || 1);
+    return (ME.price_per_month || 0) * Number($("#c-months").value || 1) + Math.round((ME.price_per_gb || 0) * Number($("#c-data").value || 0));
   }
 
   function renderMe() {
     $("#ag-user").textContent = ME.username;
     $("#ag-adminview").hidden = !ME.admin_view;
     $("#ag-balance").textContent = toman(ME.balance);
-    $("#st-price").textContent = toman(ME.price_per_month);
+    $("#st-price").textContent =
+      (ME.price_per_month ? toman(ME.price_per_month) + " / ماه" : "") +
+      (ME.price_per_gb ? (ME.price_per_month ? " + " : "") + toman(ME.price_per_gb) + " / گیگ" : "") || "رایگان";
     $("#st-users").textContent = fa(ME.users) + (ME.max_users ? " / " + fa(ME.max_users) : "");
     $("#st-tests").textContent = ME.test_per_day ? fa(ME.tests_used_24h) + " / " + fa(ME.test_per_day) : "غیرفعال";
     $("#st-spent").textContent = toman(ME.spent_30d);
     $("#c-test").hidden = !ME.test_per_day;
-    $("#c-data-wrap").hidden = !ME.allow_data_limit;
+    $("#c-data-wrap").hidden = !(ME.allow_data_limit || ME.price_per_gb);
+    $("#c-data-hint").textContent = ME.price_per_gb ? "اجباری · " + toman(ME.price_per_gb) + " هر گیگ" : "۰ = نامحدود";
+    $("#c-data").min = ME.price_per_gb ? "1" : "0";
+    $("#api-state").textContent = ME.has_api_key ? "…" + ME.api_key_hint : "ندارد";
+    $("#api-base").textContent = location.origin;
     const ifs = $("#c-iface");
     if (!ifs.options.length) {
       ifs.innerHTML = ME.ifaces.map((i) => `<option value="${i.id}">${esc(i.name)}</option>`).join("");
@@ -83,7 +108,7 @@
     }
     $("#c-iface-wrap").hidden = ME.ifaces.length <= 1;
     $("#c-cost").textContent = toman(costNow());
-    $("#ag-low").hidden = !(ME.price_per_month > 0 && ME.balance < ME.price_per_month);
+    $("#ag-low").hidden = !((ME.price_per_month > 0 || ME.price_per_gb > 0) && ME.balance < (ME.price_per_month || 0) + (ME.price_per_gb || 0));
     $("#c-submit").disabled = !ME.ifaces.length;
   }
 
@@ -149,7 +174,7 @@
           <div class="acts">
             ${p.link ? `<button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">لینک</button>` : ""}
             <a class="ag-btn sm" href="/api/agent/peer/${p.id}/config">کانفیگ</a>
-            <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}">تمدید</button>
+            <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
             ${toggle}
             <button class="ag-btn sm danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}">حذف</button>
           </div>
@@ -233,15 +258,26 @@
     if (act === "link") return copy(b.dataset.link);
     try {
       if (act === "renew") {
+        const withGb = !!(ME.price_per_gb || ME.allow_data_limit);
+        const curGb = Number(b.dataset.gb || 0);
+        const baseBody = "زمان باقی‌مانده حفظ می‌شود و حجم مصرفی صفر می‌شود.";
         const m = await ask({
           title: "تمدید " + b.dataset.name,
-          body: "مدت تمدید را انتخاب کنید. زمان باقی‌مانده حفظ می‌شود و حجم مصرفی صفر می‌شود.",
-          options: ME.months.map((x) => ({ value: x, label: MONTH_LABEL(x) + " · " + toman(ME.price_per_month * x) })),
+          body: baseBody,
+          options: ME.months.map((x) => ({ value: x, label: MONTH_LABEL(x) })),
+          number: withGb ? { label: ME.price_per_gb ? "حجم دورهٔ جدید (گیگ)" : "حجم (گیگ) · ۰ = نامحدود", value: curGb || (ME.price_per_gb ? 10 : 0) } : null,
+          onChange: (v) => {
+            const cost = (ME.price_per_month || 0) * Number(v.select || 1) + Math.round((ME.price_per_gb || 0) * (withGb ? v.number : 0));
+            $("#d-body").textContent = baseBody + "\nهزینه: " + toman(cost);
+          },
           okText: "تمدید",
         });
         if (!m) return;
+        const months = Number(withGb ? m.select : m);
+        const payload = { months };
+        if (withGb) payload.data_gb = m.number;
         b.disabled = true;
-        await api(`/api/agent/peer/${id}/renew`, { method: "POST", body: JSON.stringify({ months: Number(m) }) });
+        await api(`/api/agent/peer/${id}/renew`, { method: "POST", body: JSON.stringify(payload) });
         toast("تمدید شد");
       } else if (act === "off" || act === "on") {
         b.disabled = true;
@@ -276,6 +312,37 @@
     });
     $("#c-test").addEventListener("click", () => create(true));
     $("#c-months").addEventListener("change", () => ($("#c-cost").textContent = toman(costNow())));
+    $("#c-data").addEventListener("input", () => ($("#c-cost").textContent = toman(costNow())));
+    $("#api-new").addEventListener("click", async () => {
+      const ok = await ask({
+        title: "ساخت کلید API",
+        body: ME.has_api_key ? "کلید جدید جایگزین کلید قبلی می‌شود و کلید قبلی دیگر کار نمی‌کند." : "یک کلید برای اتصال ربات ساخته می‌شود.",
+        okText: "ساخت",
+      });
+      if (!ok) return;
+      try {
+        const j = await api("/api/agent/api_key", { method: "POST", body: "{}" });
+        const box = $("#api-key-box");
+        box.hidden = false;
+        box.innerHTML = `<strong>کلید شما (فقط همین یک بار نمایش داده می‌شود):</strong><code>${esc(j.api_key)}</code><button class="ag-btn sm" type="button" data-act="link" data-link="${esc(j.api_key)}">کپی</button>`;
+        await loadMe();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
+    $("#api-key-box").addEventListener("click", onListClick);
+    $("#api-revoke").addEventListener("click", async () => {
+      const ok = await ask({ title: "حذف کلید API", body: "رباتی که با این کلید وصل است دیگر کار نمی‌کند.", okText: "حذف" });
+      if (!ok) return;
+      try {
+        await api("/api/agent/api_key", { method: "POST", body: JSON.stringify({ revoke: true }) });
+        $("#api-key-box").hidden = true;
+        toast("کلید حذف شد");
+        await loadMe();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
     $("#u-list").addEventListener("click", onListClick);
     $("#c-result").addEventListener("click", onListClick);
     $("#u-q").addEventListener("input", () => {
@@ -292,6 +359,7 @@
         document.querySelectorAll(".ag-tabs button").forEach((x) => x.classList.toggle("active", x === t));
         $("#tab-users").hidden = t.dataset.tab !== "users";
         $("#tab-txns").hidden = t.dataset.tab !== "txns";
+        $("#tab-api").hidden = t.dataset.tab !== "api";
         if (t.dataset.tab === "txns") loadTxns().catch((e) => toast(e.message, true));
       }),
     );

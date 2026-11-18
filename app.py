@@ -265,6 +265,14 @@ def _peer_schema():
             statements.append(f'ALTER TABLE peer ADD COLUMN {_col} INTEGER')
     if 'reseller_id' not in peer_cols:
         statements.append('ALTER TABLE peer ADD COLUMN reseller_id INTEGER')
+    if insp.has_table('reseller'):
+        rs_cols = {c['name'] for c in insp.get_columns('reseller')}
+        if 'price_per_gb' not in rs_cols:
+            statements.append('ALTER TABLE reseller ADD COLUMN price_per_gb BIGINT NOT NULL DEFAULT 0')
+        if 'api_key_hash' not in rs_cols:
+            statements.append('ALTER TABLE reseller ADD COLUMN api_key_hash VARCHAR(64)')
+        if 'api_key_hint' not in rs_cols:
+            statements.append('ALTER TABLE reseller ADD COLUMN api_key_hint VARCHAR(16)')
 
     if insp.has_table('subscription'):
         subscription_cols = {
@@ -584,7 +592,8 @@ def _api_same_origin_guard():
     panel's own pages. Without this, a page on another origin of the same site
     (e.g. a hacked shop.<domain>) could make the admin's browser disable,
     delete or rotate peers. Callers with an API key (the bot) are unaffected."""
-    if (request.headers.get('X-API-KEY') or '').strip() or (request.headers.get('Authorization') or '').strip():
+    if ((request.headers.get('X-API-KEY') or '').strip() or (request.headers.get('Authorization') or '').strip()
+            or (request.headers.get('X-Agent-Key') or '').strip()):
         return None
     sfs = (request.headers.get('Sec-Fetch-Site') or '').strip().lower()
     if sfs:
@@ -34398,7 +34407,41 @@ def _rs_internal(view, path, payload=None, method='POST', **kwargs):
     return resp.status_code, body
 
 
+def _rs_key_hash(key):
+    import hashlib
+    return hashlib.sha256((key or '').strip().encode()).hexdigest()
+
+
+def _rs_from_api_key():
+    key = (request.headers.get('X-Agent-Key') or '').strip()
+    if not key:
+        auth = (request.headers.get('Authorization') or '').strip()
+        if auth.lower().startswith('bearer '):
+            key = auth[7:].strip()
+    if not key.startswith('rsk_') or len(key) < 20:
+        return None
+    r = Reseller.query.filter(Reseller.api_key_hash == _rs_key_hash(key)).first()
+    if not r or not r.enabled:
+        return None
+    import hmac
+    if not hmac.compare_digest(r.api_key_hash or '', _rs_key_hash(key)):
+        return None
+    return r
+
+
+def _rs_new_api_key(r):
+    import secrets
+    key = 'rsk_' + secrets.token_urlsafe(30)
+    r.api_key_hash = _rs_key_hash(key)
+    r.api_key_hint = key[-6:]
+    return key
+
+
 def _rs_current():
+    if (request.path or '').startswith('/api/agent/'):
+        via_key = _rs_from_api_key()
+        if via_key is not None:
+            return via_key
     rid = session.get('rs_id')
     if not rid:
         return None
@@ -34542,6 +34585,8 @@ def _rs_public(r, with_stats=True):
     d = {
         'id': r.id, 'username': r.username, 'enabled': bool(r.enabled),
         'balance': int(r.balance or 0), 'price_per_month': int(r.price_per_month or 0),
+        'price_per_gb': int(r.price_per_gb or 0),
+        'has_api_key': bool(r.api_key_hash), 'api_key_hint': r.api_key_hint or '',
         'max_users': int(r.max_users or 0), 'iface_ids': r.iface_ids(),
         'test_per_day': int(r.test_per_day or 0), 'test_hours': int(r.test_hours or 0),
         'test_mb': int(r.test_mb or 0), 'allow_data_limit': bool(r.allow_data_limit),
@@ -34559,6 +34604,26 @@ def _rs_public(r, with_stats=True):
                          ResellerTxn.at >= since).scalar()) or 0
         d['spent_30d'] = -int(spent)
     return d
+
+
+def _rs_price(r, months, data_gb):
+    """Wallet cost: months x price/month + GB x price/GB."""
+    return int(r.price_per_month or 0) * int(months or 0) + int(round(float(r.price_per_gb or 0) * float(data_gb or 0)))
+
+
+def _rs_read_gb(r, data, required):
+    """GB requested for a user. Admin price/GB > 0 means volume selling, so a
+    positive GB is required; otherwise GB is optional (0 = unlimited)."""
+    try:
+        gb = float(data.get('data_gb') or 0)
+    except (TypeError, ValueError):
+        raise ValueError('حجم نامعتبر است')
+    gb = max(0.0, min(10000.0, gb))
+    if r.price_per_gb and required and gb <= 0:
+        raise ValueError('حجم (گیگ) را وارد کنید')
+    if not r.price_per_gb and not r.allow_data_limit:
+        gb = 0.0
+    return gb
 
 
 def _rs_tests_last_24h(r):
@@ -34657,6 +34722,42 @@ def agent_peers():
     return jsonify(ok=True, total=total, page=page, per=per, peers=_rs_peer_rows(peers))
 
 
+@app.post('/api/agent/api_key')
+@reseller_required
+def agent_api_key():
+    """Agent creates / replaces its own API key (shown once)."""
+    r = g.reseller
+    if (request.get_json(silent=True) or {}).get('revoke'):
+        r.api_key_hash, r.api_key_hint = None, None
+        db.session.commit()
+        return jsonify(ok=True, revoked=True)
+    key = _rs_new_api_key(r)
+    db.session.commit()
+    try:
+        logpanel_action('reseller_api_key_new', f'reseller={r.username}; by=agent')
+    except Exception:
+        pass
+    return jsonify(ok=True, api_key=key)
+
+
+@app.get('/api/agent/peer/<int:pid>')
+@reseller_required
+def agent_peer_get(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    return jsonify(ok=True, peer=_rs_peer_rows([p])[0])
+
+
+@app.get('/api/agent/peer/by-name/<path:name>')
+@reseller_required
+def agent_peer_by_name(name):
+    r = g.reseller
+    p = Peer.query.filter(Peer.reseller_id == r.id, func.lower(Peer.name) == (name or '').strip().lower()).first()
+    if p is None:
+        return jsonify(ok=False, error='not_found'), 404
+    return jsonify(ok=True, peer=_rs_peer_rows([p])[0])
+
+
 @app.get('/api/agent/txns')
 @reseller_required
 def agent_txns():
@@ -34718,16 +34819,15 @@ def agent_create_peer():
             months = 0
         if months not in _RS_MONTHS:
             return jsonify(ok=False, error='invalid_months'), 400
-        cost = int(r.price_per_month or 0) * months
+        try:
+            data_gb = _rs_read_gb(r, data, required=True)
+        except ValueError as exc:
+            return jsonify(ok=False, error='invalid_data_gb', detail=str(exc)), 400
+        cost = _rs_price(r, months, data_gb)
         days = 30 * months
         payload_limit = {'data_limit_value': 0, 'data_limit_unit': 'Gi'}
-        if r.allow_data_limit:
-            try:
-                data_gb = max(0.0, min(10000.0, float(data.get('data_gb') or 0)))
-            except (TypeError, ValueError):
-                return jsonify(ok=False, error='invalid_data_gb'), 400
-            if data_gb:
-                payload_limit = {'data_limit_value': data_gb, 'data_limit_unit': 'Gi'}
+        if data_gb:
+            payload_limit = {'data_limit_value': data_gb, 'data_limit_unit': 'Gi'}
         if cost > 0 and not _rs_take(r, cost):
             return jsonify(ok=False, error='low_balance',
                            detail=f'موجودی کافی نیست. هزینه: {cost:,} تومان، موجودی: {int(r.balance or 0):,} تومان'), 402
@@ -34781,7 +34881,20 @@ def agent_renew_peer(pid):
         months = 0
     if months not in _RS_MONTHS:
         return jsonify(ok=False, error='invalid_months'), 400
-    cost = int(r.price_per_month or 0) * months
+    # volume for the new period: given value, else the user's current cap
+    if data.get('data_gb') in (None, ''):
+        cur_gb = 0.0
+        if p.data_limit_value:
+            try:
+                cur_gb = round((p.limit_bytes() or 0) / 1073741824, 3)
+            except Exception:
+                cur_gb = 0.0
+        data = dict(data, data_gb=cur_gb)
+    try:
+        new_gb = _rs_read_gb(r, data, required=True)
+    except ValueError as exc:
+        return jsonify(ok=False, error='invalid_data_gb', detail=str(exc)), 400
+    cost = _rs_price(r, months, new_gb)
     if cost > 0 and not _rs_take(r, cost):
         return jsonify(ok=False, error='low_balance',
                        detail=f'موجودی کافی نیست. هزینه: {cost:,} تومان، موجودی: {int(r.balance or 0):,} تومان'), 402
@@ -34796,8 +34909,10 @@ def agent_renew_peer(pid):
         payload = {'time_limit_days': round(remaining + add, 6), 'renew': True}
     else:
         payload = {'time_limit_days': float(p.time_limit_days or 0) + add}
+    payload['data_limit_value'] = new_gb if new_gb else 0
+    payload['data_limit_unit'] = 'Gi'
     # a renewal is a new period: traffic starts from zero
-    if p.data_limit_value:
+    if p.data_limit_value or new_gb:
         try:
             _wg_dump_invalidate()
             p.bytes_offset = max(0, int(_wg_transfer(p) or 0))
@@ -34821,7 +34936,7 @@ def agent_renew_peer(pid):
         log_event(p, 'reseller_renewed', f'reseller={r.username}; months={months}; cost={cost}')
     except Exception:
         pass
-    _rs_txn(r, 'renew', -cost, peer=p, months=months)
+    _rs_txn(r, 'renew', -cost, peer=p, months=months, note=(f'{new_gb:g} GB' if new_gb else ''))
     try:
         logpanel_action('reseller_peer_renew', f'reseller={r.username}; pid={p.id}; months={months}; cost={cost}')
     except Exception:
@@ -34928,7 +35043,7 @@ def _rs_apply_fields(r, data, creating=False):
             raise ValueError('Password must be at least 6 characters')
         r.password_hash = Reseller.hash_pw(pw)
         r.session_ver = int(r.session_ver or 1) + 1
-    for key, lo, hi in (('price_per_month', 0, 10**10), ('max_users', 0, 10**6),
+    for key, lo, hi in (('price_per_month', 0, 10**10), ('price_per_gb', 0, 10**9), ('max_users', 0, 10**6),
                         ('test_per_day', 0, 1000), ('test_hours', 1, 24 * 7), ('test_mb', 1, 10**6)):
         if key in data:
             try:
@@ -35029,6 +35144,22 @@ def api_resellers_delete(rid):
     _RS_NAME_MEMO['ts'] = 0
     logpanel_action('reseller_delete', f'reseller={name}; users_kept={n}')
     return jsonify(ok=True, users_kept=n)
+
+
+@app.post('/api/resellers/<int:rid>/api_key')
+@_admin_only
+def api_resellers_api_key(rid):
+    """Create (or replace) the agent's API key. Shown once. {"revoke": true} removes it."""
+    r = db.session.get(Reseller, rid) or abort(404)
+    if (request.get_json(silent=True) or {}).get('revoke'):
+        r.api_key_hash, r.api_key_hint = None, None
+        db.session.commit()
+        logpanel_action('reseller_api_key_revoke', f'reseller={r.username}')
+        return jsonify(ok=True, revoked=True)
+    key = _rs_new_api_key(r)
+    db.session.commit()
+    logpanel_action('reseller_api_key_new', f'reseller={r.username}')
+    return jsonify(ok=True, api_key=key)
 
 
 @app.post('/api/resellers/<int:rid>/login_as')

@@ -3,6 +3,18 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — users' traffic on the dashboard
+
+- New "Users' traffic" card on the dashboard: today, yesterday, last 7 days,
+  this month, last month and all time (download / upload), plus a 30-day bar
+  strip. Days follow the panel timezone.
+- A background thread samples the byte counters of every WireGuard interface
+  once a minute (`instance/traffic_stats.json`, ~13 months kept); interface
+  restarts and reboots are handled. Counting starts when this version runs.
+- API: `GET /api/traffic_stats`.
+- Language button moved into the sidebar; sidebar bottom controls sit right
+  under the menu.
+
 ## 2026-11-18 — peers page: server-side paging
 
 - Local interfaces: search, status filter, sort and paging now run on the

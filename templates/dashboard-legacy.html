@@ -613,6 +613,7 @@ current_user.is_superuser|default(false)) %} {% if dashboard_is_admin %}
 </div>
 
 <script defer src="{{ url_for('static', filename='js/index.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/traffic-stats.js') }}"></script>
 {% if dashboard_is_admin %}
 <script
   defer

@@ -32793,10 +32793,156 @@ def subscription_public_inbound_geo(token, link_id):
         public_host=host
     )
 
+# =====================================================================
+# Users' traffic statistics (today / month / all-time) for the dashboard.
+# A master-process thread samples the byte counters of every WireGuard
+# interface once a minute and adds the growth to per-day buckets (panel
+# timezone). rx on a WG device = sent by clients (upload), tx = to clients
+# (download). Counter resets (interface restart / reboot) are handled.
+# =====================================================================
+_TS_FILE = os.path.join(INSTANCE_DIR, 'traffic_stats.json')
+_TS_THREAD_STARTED = False
+_TS_LOCK = threading.Lock()
+
+
+def _ts_wg_devices():
+    out = {}
+    try:
+        for name in os.listdir('/sys/class/net'):
+            base = f'/sys/class/net/{name}'
+            try:
+                with open(f'{base}/uevent') as fh:
+                    if 'DEVTYPE=wireguard' not in fh.read():
+                        continue
+                with open(f'{base}/statistics/rx_bytes') as fh:
+                    rx = int(fh.read().strip() or 0)
+                with open(f'{base}/statistics/tx_bytes') as fh:
+                    tx = int(fh.read().strip() or 0)
+                out[name] = [rx, tx]
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _ts_load():
+    try:
+        with open(_TS_FILE, encoding='utf-8') as fh:
+            d = json.load(fh) or {}
+    except Exception:
+        d = {}
+    d.setdefault('last', {})
+    d.setdefault('days', {})      # 'YYYY-MM-DD' -> [down, up]
+    d.setdefault('total', [0, 0])
+    d.setdefault('since', '')
+    return d
+
+
+def _ts_save(d):
+    tmp = _TS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(d, fh, separators=(',', ':'))
+    os.replace(tmp, _TS_FILE)
+
+
+def _ts_tick():
+    devs = _ts_wg_devices()
+    if not devs:
+        return
+    try:
+        tz = _panel_timezone()
+    except Exception:
+        tz = None
+    today = datetime.now(tz).strftime('%Y-%m-%d') if tz else datetime.utcnow().strftime('%Y-%m-%d')
+    with _TS_LOCK:
+        d = _ts_load()
+        if not d['since']:
+            d['since'] = today
+        down = up = 0
+        for name, (rx, tx) in devs.items():
+            prev = d['last'].get(name)
+            if prev and len(prev) == 2:
+                drx = rx - prev[0] if rx >= prev[0] else rx     # counter reset
+                dtx = tx - prev[1] if tx >= prev[1] else tx
+                up += max(0, drx)
+                down += max(0, dtx)
+            d['last'][name] = [rx, tx]
+        if down or up:
+            day = d['days'].setdefault(today, [0, 0])
+            day[0] += down
+            day[1] += up
+            d['total'][0] += down
+            d['total'][1] += up
+        # keep ~13 months of daily buckets
+        if len(d['days']) > 400:
+            for k in sorted(d['days'])[:-400]:
+                d['days'].pop(k, None)
+        _ts_save(d)
+
+
+def _ts_loop():
+    time.sleep(15)
+    while True:
+        try:
+            with app.app_context():
+                _ts_tick()
+        except Exception:
+            app.logger.debug('traffic stats tick failed', exc_info=True)
+        time.sleep(60)
+
+
+def _start_traffic_stats():
+    global _TS_THREAD_STARTED
+    if _TS_THREAD_STARTED:
+        return
+    _TS_THREAD_STARTED = True
+    threading.Thread(target=_ts_loop, name='traffic-stats', daemon=True).start()
+
+
+@app.get('/api/traffic_stats')
+@require_api_key_or_login
+def api_traffic_stats():
+    d = _ts_load()
+    try:
+        tz = _panel_timezone()
+        now = datetime.now(tz)
+    except Exception:
+        now = datetime.utcnow()
+    today = now.strftime('%Y-%m-%d')
+    yesterday = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+    month = now.strftime('%Y-%m')
+    first_this = now.replace(day=1)
+    last_month = (first_this - timedelta(days=1)).strftime('%Y-%m')
+
+    def sum_prefix(prefix):
+        dn = upv = 0
+        for k, v in d['days'].items():
+            if k.startswith(prefix):
+                dn += int(v[0]); upv += int(v[1])
+        return [dn, upv]
+
+    week = [0, 0]
+    for i in range(7):
+        k = (now - timedelta(days=i)).strftime('%Y-%m-%d')
+        v = d['days'].get(k) or [0, 0]
+        week[0] += int(v[0]); week[1] += int(v[1])
+    daily = []
+    for i in range(29, -1, -1):
+        k = (now - timedelta(days=i)).strftime('%Y-%m-%d')
+        v = d['days'].get(k) or [0, 0]
+        daily.append({'day': k, 'down': int(v[0]), 'up': int(v[1])})
+    return jsonify(ok=True, since=d.get('since') or '', timezone=_panel_timezone_name(),
+                   today=d['days'].get(today) or [0, 0], yesterday=d['days'].get(yesterday) or [0, 0],
+                   week=week, month=sum_prefix(month), last_month=sum_prefix(last_month),
+                   total=d.get('total') or [0, 0], daily=daily)
+
+
 _start_retention()
 _start_expiry_enforcer()
 _start_single_user_enforcer()
 _start_network_tuning()
+_start_traffic_stats()
 _start_backup_scheduler()
 _node_notify_monitor()
 # ========================================

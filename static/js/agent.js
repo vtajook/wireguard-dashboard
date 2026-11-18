@@ -186,7 +186,7 @@
           <div class="num">${remaining(p)}</div>
           <div class="num">${usage}</div>
           <div class="acts">
-            ${p.link ? `<button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">لینک</button>` : ""}
+            ${p.link ? `<a class="ag-btn sm" href="${esc(p.link)}" target="_blank" rel="noopener" title="صفحهٔ کاربر: QR، کانفیگ، حجم و زمان">باز کردن ساب</a><button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">کپی لینک</button>` : ""}
             <a class="ag-btn sm" href="/api/agent/peer/${p.id}/config">کانفیگ</a>
             <button class="ag-btn sm" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}">تغییر لینک</button>
             ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن حجم/زمان</button>` : ""}
@@ -223,7 +223,7 @@
     const box = $("#c-result");
     box.hidden = false;
     box.innerHTML = `<strong>${esc(j.name)} ساخته شد${j.cost ? " · " + toman(j.cost) : ""}</strong>
-      ${j.link ? `<code>${esc(j.link)}</code><button class="ag-btn sm" type="button" data-act="link" data-link="${esc(j.link)}">کپی لینک</button>` : ""}
+      ${j.link ? `<code>${esc(j.link)}</code><button class="ag-btn sm" type="button" data-act="link" data-link="${esc(j.link)}">کپی لینک</button><a class="ag-btn sm" href="${esc(j.link)}" target="_blank" rel="noopener">باز کردن ساب</a>` : ""}
       <a class="ag-btn sm" href="/api/agent/peer/${j.id}/config">دانلود کانفیگ</a>`;
   }
 

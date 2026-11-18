@@ -9,6 +9,7 @@
   const MONTH_LABEL = (m) => (m === 12 ? "یک ساله" : fa(m) + " ماهه");
   let ME = null;
   let page = 1;
+  let status = "all";
   let qTimer = null;
 
   function toast(msg, bad) {
@@ -158,7 +159,8 @@
 
   async function loadPeers() {
     const q = encodeURIComponent($("#u-q").value.trim());
-    const j = await api(`/api/agent/peers?page=${page}&per=50&q=${q}`);
+    const j = await api(`/api/agent/peers?page=${page}&per=50&q=${q}&status=${status}`);
+    if (j.counts) document.querySelectorAll("#u-filters [data-c]").forEach((el) => (el.textContent = fa(j.counts[el.dataset.c] || 0)));
     $("#u-total").textContent = fa(j.total) + " کاربر";
     const pages = Math.max(1, Math.ceil(j.total / j.per));
     $("#u-page").textContent = fa(page) + " / " + fa(pages);
@@ -166,7 +168,7 @@
     $("#u-next").disabled = page >= pages;
     const list = $("#u-list");
     if (!j.peers.length) {
-      list.innerHTML = '<div class="ag-empty">هنوز کاربری نساخته‌اید</div>';
+      list.innerHTML = `<div class="ag-empty">${status === "all" && !$("#u-q").value.trim() ? "هنوز کاربری نساخته‌اید" : "کاربری با این فیلتر نیست"}</div>`;
       return;
     }
     list.innerHTML = j.peers
@@ -388,6 +390,14 @@
       }
     });
     $("#u-list").addEventListener("click", onListClick);
+    $("#u-filters").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-st]");
+      if (!b) return;
+      status = b.dataset.st;
+      page = 1;
+      document.querySelectorAll("#u-filters [data-st]").forEach((x) => x.classList.toggle("active", x === b));
+      loadPeers().catch((err) => toast(err.message, true));
+    });
     const syncSel = () => {
       $("#u-del-sel").disabled = !SEL.size;
       $("#u-del-sel").textContent = SEL.size ? `حذف ${fa(SEL.size)} انتخاب‌شده` : "حذف انتخاب‌شده‌ها";

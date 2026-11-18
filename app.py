@@ -34725,11 +34725,55 @@ def agent_peers():
     s = (request.args.get('q') or '').strip()
     if s:
         q = q.filter(Peer.name.ilike(f'%{s}%'))
-    total = q.count()
     page = max(1, request.args.get('page', 1, type=int))
     per = min(100, max(10, request.args.get('per', 50, type=int)))
-    peers = q.order_by(Peer.id.desc()).offset((page - 1) * per).limit(per).all()
-    return jsonify(ok=True, total=total, page=page, per=per, peers=_rs_peer_rows(peers))
+    flt = (request.args.get('status') or 'all').strip().lower()
+
+    # classify every own peer cheaply (no per-peer queries) for counts + filter
+    now = now_ts()
+    dump = _wg_dump_all() or {}
+    counts = {'all': 0, 'online': 0, 'active': 0, 'disabled': 0, 'blocked': 0, 'expired': 0, 'unused': 0}
+    match_ids = []
+    for p in q.order_by(Peer.id.desc()).all():
+        try:
+            exp = _effective_expiry_ts(p)
+        except Exception:
+            exp = None
+        expired = exp is not None and exp <= now
+        hs = 0
+        try:
+            ent = (dump.get(iface_devname(p.iface)) or {}).get(p.public_key)
+            hs = int(ent[0] or 0) if ent else 0
+        except Exception:
+            pass
+        online = bool(hs and now - hs <= 180)
+        try:
+            unused = _timer_anchor_ts(p) is None
+        except Exception:
+            unused = False
+        tags = {'all'}
+        if expired:
+            tags.add('expired')
+        if p.status == 'blocked':
+            tags.add('blocked')
+        elif p.status == 'offline':
+            tags.add('disabled')
+        elif p.status == 'online' and not expired:
+            tags.add('active')
+            if online:
+                tags.add('online')
+            if unused:
+                tags.add('unused')
+        for t in tags:
+            counts[t] += 1
+        if flt in tags or (flt not in counts):
+            match_ids.append(p.id)
+    total = len(match_ids)
+    page_ids = match_ids[(page - 1) * per: page * per]
+    peers = Peer.query.filter(Peer.id.in_(page_ids or [-1])).all()
+    peers.sort(key=lambda x: page_ids.index(x.id))
+    return jsonify(ok=True, total=total, page=page, per=per, counts=counts, status=flt,
+                   peers=_rs_peer_rows(peers))
 
 
 @app.post('/api/agent/api_key')

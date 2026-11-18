@@ -172,3 +172,9 @@ input, select, button { font: inherit; color: inherit; }
 .ag-selall { display: flex; gap: 6px; align-items: center; font-size: 13px; white-space: nowrap; }
 .ag-list-tools { margin-inline-start: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 .ag-list-head { flex-wrap: wrap; }
+
+.ag-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.ag-filters button { border: 1px solid var(--ag-line); background: var(--ag-card); color: var(--ag-text); padding: 5px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; }
+.ag-filters button b { font-weight: 600; color: var(--ag-muted); margin-inline-start: 4px; font-variant-numeric: tabular-nums; }
+.ag-filters button.active { background: var(--ag-accent); border-color: var(--ag-accent); color: #fff; }
+.ag-filters button.active b { color: rgba(255,255,255,.85); }

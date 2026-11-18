@@ -3582,7 +3582,7 @@
     if(!target)return false;openPeerDiagnosisEditor(target,stage);return true;
   };
   window.addEventListener('wgpanel:diagnosis-changed',()=>refreshPeers({abortPrev:true}));
-  async function postEdit(path, okMsg, failMsg) {
+  async function postEdit(path, okMsg, failMsg, body) {
     const pathId = (String(path).match(/\/peer\/([^/]+)/) || [])[1];
 
     const actionCard = pathId
@@ -3605,9 +3605,10 @@
       const response = await fetch(apiPath(path), {
         method: "POST",
         credentials: "same-origin",
-        headers: {
-          Accept: "application/json",
-        },
+        headers: body
+          ? { Accept: "application/json", "Content-Type": "application/json" }
+          : { Accept: "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
       });
 
       const contentType = String(
@@ -6479,15 +6480,24 @@
       return;
     }
 
+    const askAction = (title, body, okText) =>
+      window.wgConfirm
+        ? window.wgConfirm({ title, body, okText })
+        : Promise.resolve(confirm(`${title}\n\n${body}`));
+    const pName = findPeer(id)?.name || id;
+
     if (action === "enable") {
       const path = scopeId ? nodeFunc("enable") : localFunc("enable");
       if (!path) return;
-      return postEdit(path, "Peer enabled", "Enable failed");
+      if (!(await askAction(`Enable ${pName}?`, "The peer can connect again. Used traffic, first use and expiry are kept as they are.", "Enable"))) return;
+      // reset:false = only re-enable (the old default also wiped usage and restarted the timer)
+      return postEdit(path, "Peer enabled", "Enable failed", { reset: false });
     }
 
     if (action === "disable") {
       const path = scopeId ? nodeFunc("disable") : localFunc("disable");
       if (!path) return;
+      if (!(await askAction(`Disable ${pName}?`, "The peer is disconnected until you enable it again. Its time keeps running.", "Disable"))) return;
       return postEdit(path, "Peer disabled", "Disable failed");
     }
 
@@ -6495,6 +6505,7 @@
       const path = scopeId ? nodeFunc("reset_data") : localFunc("reset_data");
 
       if (!path) return;
+      if (!(await askAction(`Reset data of ${pName}?`, "Used traffic goes back to zero. A peer blocked for data can connect again. Time is not changed.", "Reset data"))) return;
 
       btn.disabled = true;
 
@@ -6538,6 +6549,7 @@
       const path = scopeId ? nodeFunc("reset_timer") : localFunc("reset_timer");
 
       if (!path) return;
+      if (!(await askAction(`Reset timer of ${pName}?`, "The time allowance starts again from the beginning (from the next connection for first-use peers). Used traffic is not changed.", "Reset timer"))) return;
 
       btn.disabled = true;
 

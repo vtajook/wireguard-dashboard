@@ -3,6 +3,15 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — safer peer card buttons
+
+- Every action icon on a peer card now shows its name under it.
+- **Enable** no longer wipes the peer: it used to reset used traffic, first
+  use and the timer (time started again from the next connection). It now only
+  re-enables (`reset:false`) and keeps usage and expiry.
+- Enable, Disable, Reset data and Reset timer now ask for confirmation and say
+  exactly what they do.
+
 ## 2026-11-18 — reseller GB price and agent API
 
 - Resellers: new **Price per GB** (0 = monthly unlimited, as before) and

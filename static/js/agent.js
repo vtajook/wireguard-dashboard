@@ -176,9 +176,9 @@
         const usage = size(p.used_bytes) + (p.limit_bytes ? " از " + size(p.limit_bytes) : " · نامحدود");
         const toggle =
           p.status === "online"
-            ? `<button class="ag-ico" data-act="off" data-id="${p.id}" title="غیرفعال کردن"><i class="fas fa-ban"></i></button>`
+            ? `<button class="ag-ico" data-act="off" data-id="${p.id}" title="غیرفعال کردن"><i class="fas fa-ban"></i><span>غیرفعال</span></button>`
             : p.reseller_disabled
-              ? `<button class="ag-ico ok" data-act="on" data-id="${p.id}" title="فعال کردن"><i class="fas fa-play"></i></button>`
+              ? `<button class="ag-ico ok" data-act="on" data-id="${p.id}" title="فعال کردن"><i class="fas fa-play"></i><span>فعال</span></button>`
               : "";
         return `<div class="ag-row">
           <div class="ag-namecell"><input type="checkbox" class="u-sel" data-id="${p.id}" ${SEL.has(p.id) ? "checked" : ""} aria-label="انتخاب"><div><div class="nm" title="${esc(p.name)}">${esc(p.name)}</div><div class="sub">${esc(p.iface)}</div></div></div>
@@ -188,13 +188,13 @@
           <div class="acts">
             <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
             ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن</button>` : ""}
-            ${p.link ? `<a class="ag-ico" href="${esc(p.link)}" target="_blank" rel="noopener" title="باز کردن ساب (صفحهٔ کاربر)"><i class="fas fa-up-right-from-square"></i></a><button class="ag-ico" data-act="link" data-link="${esc(p.link)}" title="کپی لینک ساب"><i class="fas fa-link"></i></button>` : ""}
-            <button class="ag-ico" data-act="qr" data-id="${p.id}" data-name="${esc(p.name)}" title="QR کانفیگ"><i class="fas fa-qrcode"></i></button>
-            <a class="ag-ico" href="/api/agent/peer/${p.id}/config" title="دانلود کانفیگ"><i class="fas fa-download"></i></a>
-            <button class="ag-ico" data-act="events" data-id="${p.id}" data-name="${esc(p.name)}" title="رویدادها"><i class="fas fa-list"></i></button>
-            <button class="ag-ico" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}" title="تغییر لینک (لینک و کلید جدید)"><i class="fas fa-rotate"></i></button>
+            ${p.link ? `<a class="ag-ico" href="${esc(p.link)}" target="_blank" rel="noopener" title="باز کردن ساب (صفحهٔ کاربر)"><i class="fas fa-up-right-from-square"></i><span>ساب</span></a><button class="ag-ico" data-act="link" data-link="${esc(p.link)}" title="کپی لینک ساب"><i class="fas fa-link"></i><span>کپی لینک</span></button>` : ""}
+            <button class="ag-ico" data-act="qr" data-id="${p.id}" data-name="${esc(p.name)}" title="QR کانفیگ"><i class="fas fa-qrcode"></i><span>QR</span></button>
+            <a class="ag-ico" href="/api/agent/peer/${p.id}/config" title="دانلود کانفیگ"><i class="fas fa-download"></i><span>کانفیگ</span></a>
+            <button class="ag-ico" data-act="events" data-id="${p.id}" data-name="${esc(p.name)}" title="رویدادها"><i class="fas fa-list"></i><span>رویدادها</span></button>
+            <button class="ag-ico" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}" title="تغییر لینک (لینک و کلید جدید)"><i class="fas fa-rotate"></i><span>تغییر لینک</span></button>
             ${toggle}
-            <button class="ag-ico danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}" title="حذف"><i class="fas fa-trash"></i></button>
+            <button class="ag-ico danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}" title="حذف"><i class="fas fa-trash"></i><span>حذف</span></button>
           </div>
         </div>`;
       })

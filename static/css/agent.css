@@ -190,3 +190,6 @@ input, select, button { font: inherit; color: inherit; }
 .ag-events > div { display: grid; grid-template-columns: 110px 1fr; gap: 2px 10px; padding: 6px 0; border-bottom: 1px solid var(--ag-line); font-size: 13px; }
 .ag-events span { color: var(--ag-muted); font-variant-numeric: tabular-nums; }
 .ag-events small { grid-column: 2; color: var(--ag-muted); word-break: break-word; }
+
+.ag-ico { width: auto; min-width: 54px; height: auto; min-height: 44px; padding: 5px 7px; display: inline-flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; }
+.ag-ico span { font-size: 10.5px; line-height: 1.1; white-space: nowrap; }

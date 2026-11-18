@@ -5495,22 +5495,6 @@
           rsz.title = `Change subnet size of ${iface.name} (${cidr})`;
           rsz.disabled = false;
         }
-        let epb = row.querySelector("#iface-endpoint-btn");
-        if (getScopeId()) {
-          epb?.remove();
-        } else {
-          if (!epb) {
-            epb = document.createElement("button");
-            epb.id = "iface-endpoint-btn";
-            epb.className = "iface-action-btn";
-            epb.type = "button";
-            row.insertBefore(epb, row.firstChild);
-          }
-          const epNow = iface.endpoint_override || iface.effective_endpoint || "";
-          epb.innerHTML = `<i class="fas fa-tower-broadcast" aria-hidden="true"></i><span>Config domain: ${peerEsc(epNow || "not set")}</span>`;
-          epb.title = "Domain or tunnel-server IP written as Endpoint into this interface's client configs";
-          epb.disabled = false;
-        }
         let cln = row.querySelector("#iface-clean-expired-btn");
         if (getScopeId()) {
           cln?.remove();
@@ -5535,7 +5519,6 @@
       row?.querySelector("#iface-delete-btn")?.remove();
       row?.querySelector("#iface-resize-btn")?.remove();
       row?.querySelector("#iface-clean-expired-btn")?.remove();
-      row?.querySelector("#iface-endpoint-btn")?.remove();
     }
 
     const createBtn = $("#create-peer-btn");
@@ -6369,53 +6352,6 @@
       if (e.target.closest?.(".wgp-select")) e.stopPropagation();
     });
     wgpSyncBulkBar();
-  }
-
-  async function wgpIfaceEndpoint(e) {
-    const btn = e.target.closest?.("#iface-endpoint-btn");
-    if (!btn) return;
-    const iface = findIfaceById(SELECTED_IFACE_ID);
-    if (!iface || getScopeId()) return;
-    const cur = iface.endpoint_override || "";
-    const val = await (window.wgConfirm
-      ? window.wgConfirm({
-          title: `Config domain – ${iface.name}`,
-          body: `Domain or tunnel-server IP that clients of ${iface.name} connect to (written as Endpoint in their configs). Port is optional; empty port = ${iface.listen_port || "the listen port"}. Leave everything empty to go back to automatic. Peers that already have their own endpoint keep it.`,
-          value: cur || "",
-          okText: "Save",
-        })
-      : Promise.resolve(prompt("Config domain (host or host:port)", cur)));
-    if (val === null || val === false) return;
-    let text = String(val === true ? "" : val).trim().replace(/^[a-z]+:\/\//i, "").split("/")[0];
-    let host = text, port = "";
-    const m = text.match(/^\[([0-9a-f:]+)\](?::(\d+))?$/i) || text.match(/^([^:]+)(?::(\d+))?$/);
-    if (text && !m) {
-      toastSafe("Enter a domain or IP, optionally with :port", "error");
-      return;
-    }
-    if (m) {
-      host = m[1];
-      port = m[2] || "";
-    }
-    if (host && !port) port = String(iface.listen_port || "");
-    btn.disabled = true;
-    try {
-      const r = await fetch(`/api/iface/${encodeURIComponent(iface.id)}/endpoint-default`, {
-        method: "PUT",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(host ? { host, port: Number(port) } : { host: null, port: null }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.detail || j.message || j.error || `HTTP ${r.status}`);
-      toastSafe(host ? `Config domain of ${iface.name}: ${host}:${port}` : `Config domain of ${iface.name} cleared`, "success");
-      try { await refreshInterfacesUI({ force: true }); } catch (_) {}
-      await refreshPeers?.({ abortPrev: true });
-    } catch (err) {
-      toastSafe(`Save failed: ${err.message || err}`, "error");
-    } finally {
-      btn.disabled = false;
-    }
   }
 
   async function wgpIfaceCleanExpired(e) {
@@ -7702,7 +7638,6 @@
       wgpInitBulk(peersCont);
       document.addEventListener("click", wgpIfaceResize);
       document.addEventListener("click", wgpIfaceCleanExpired);
-      document.addEventListener("click", wgpIfaceEndpoint);
     }
 
     refreshPeers();

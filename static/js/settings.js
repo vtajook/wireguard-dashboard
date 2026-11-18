@@ -3624,38 +3624,3 @@ async function loadAdminLogs() {
   if(document.documentElement.getAttribute('data-tab')==='traffic')loadTraffic();
 })();
 
-/* Config delivery domain (Endpoint host written into client configs). */
-(() => {
-  const input = document.getElementById("client-domain");
-  const btn = document.getElementById("client-domain-save");
-  const state = document.getElementById("client-domain-state");
-  if (!input || !btn) return;
-  const say = (m, t) => { const f = window.toastSafe || window.notify || window.toast; if (f) f(m, t || "info"); };
-  fetch("/api/client_domain", { credentials: "same-origin", headers: { Accept: "application/json" } })
-    .then((r) => r.json())
-    .then((j) => {
-      input.value = j.host || "";
-      if (state) state.textContent = j.host ? "In use" : "Not set";
-    })
-    .catch(() => {});
-  btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    try {
-      const r = await fetch("/api/client_domain", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ host: input.value.trim() }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
-      input.value = j.host || "";
-      if (state) state.textContent = j.host ? "In use" : "Not set";
-      say(j.host ? `Delivery domain saved: ${j.host}` : "Delivery domain cleared", "success");
-    } catch (e) {
-      say(`Save failed: ${e.message || e}`, "error");
-    } finally {
-      btn.disabled = false;
-    }
-  });
-})();

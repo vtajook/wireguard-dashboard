@@ -101,30 +101,6 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
         aria-labelledby="TLS"
       >
         <div class="cards">
-          <div class="card full" id="client-domain-card">
-            <div class="card-header">
-              <i class="fa-solid fa-tower-broadcast"></i><span>Config delivery domain</span>
-            </div>
-            <div class="card-body">
-              <div class="small-text" style="margin-bottom:10px">
-                The domain (or IP) written as <b>Endpoint</b> into every client config of local
-                interfaces, e.g. <code>wg.example.com</code>. It must point straight to this server
-                (DNS only, <b>not</b> proxied by Cloudflare). The port is each interface's listen port.
-                Interfaces with their own Client endpoint host keep theirs; peers with an endpoint
-                set by you or the bot keep theirs. Empty = old behaviour (panel domain / server IP).
-              </div>
-              <div class="form-grid-2">
-                <div class="form-group">
-                  <label for="client-domain">Delivery domain</label>
-                  <input class="input" id="client-domain" placeholder="wg.example.com" autocomplete="off" dir="ltr" />
-                </div>
-                <div class="form-group" style="display:flex;align-items:flex-end;gap:8px">
-                  <button type="button" class="btn" id="client-domain-save"><i class="fa-solid fa-floppy-disk"></i> Save delivery domain</button>
-                  <span class="small-text" id="client-domain-state"></span>
-                </div>
-              </div>
-            </div>
-          </div>
           <div class="card full">
             <div class="card-header">
               <i class="fa-solid fa-lock"></i><span>Panel Security (TLS)</span>

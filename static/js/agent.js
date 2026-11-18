@@ -185,6 +185,7 @@
           <div class="acts">
             ${p.link ? `<button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">لینک</button>` : ""}
             <a class="ag-btn sm" href="/api/agent/peer/${p.id}/config">کانفیگ</a>
+            <button class="ag-btn sm" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}">تغییر لینک</button>
             <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
             ${toggle}
             <button class="ag-btn sm danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}">حذف</button>
@@ -290,6 +291,17 @@
         b.disabled = true;
         await api(`/api/agent/peer/${id}/renew`, { method: "POST", body: JSON.stringify(payload) });
         toast("تمدید شد");
+      } else if (act === "rotate") {
+        const ok = await ask({
+          title: "تغییر لینک " + b.dataset.name,
+          body: "لینک و کلید جدید ساخته می‌شود و لینک و کانفیگ قبلی دیگر کار نمی‌کند. نام، زمان، حجم و مصرف تغییر نمی‌کند. هزینه‌ای ندارد.",
+          okText: "تغییر لینک",
+        });
+        if (!ok) return;
+        b.disabled = true;
+        const j = await api(`/api/agent/peer/${id}/rotate`, { method: "POST", body: "{}" });
+        if (j.link) await copy(j.link);
+        toast("لینک جدید ساخته و کپی شد");
       } else if (act === "off" || act === "on") {
         b.disabled = true;
         await api(`/api/agent/peer/${id}/toggle`, { method: "POST", body: JSON.stringify({ enable: act === "on" }) });

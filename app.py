@@ -35014,6 +35014,25 @@ def agent_delete_peer(pid):
     return jsonify(ok=True, refund=refund, balance=int(db.session.get(Reseller, r.id).balance or 0))
 
 
+@app.post('/api/agent/peer/<int:pid>/rotate')
+@reseller_required
+def agent_rotate_peer(pid):
+    """New link + new keys; the old link and config stop working.
+    Name, time, traffic and usage stay the same. Free."""
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    code, body = _rs_internal(api_peer_rotate, f'/api/peer/{p.id}/rotate', {}, pid=p.id)
+    if code >= 400 or not (body or {}).get('ok'):
+        return jsonify(ok=False, error=(body or {}).get('error') or 'rotate_failed',
+                       detail=(body or {}).get('detail') or 'تغییر لینک انجام نشد'), 502
+    try:
+        logpanel_action('reseller_peer_rotate', f'reseller={r.username}; pid={p.id}')
+    except Exception:
+        pass
+    tok = (body or {}).get('shortlink_token')
+    return jsonify(ok=True, id=p.id, link=_shortlink_url(tok) if tok else '')
+
+
 @app.get('/api/agent/peer/<int:pid>/config')
 @reseller_required
 def agent_peer_config(pid):

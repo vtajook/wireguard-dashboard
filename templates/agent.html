@@ -87,6 +87,7 @@ POST   /api/agent/peers                       → create
        ← {"ok":true,"id":12,"link":"https://…","cost":…,"balance":…}
 POST   /api/agent/peer/ID/renew               → {"months":1,"data_gb":50}
 POST   /api/agent/peer/ID/toggle              → {"enable":false}
+POST   /api/agent/peer/ID/rotate              → new link + keys (old config stops) ← {"link":"…"}
 DELETE /api/agent/peer/ID
 GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>
         <p>Errors: <code>{"ok":false,"error":"low_balance","detail":"…"}</code> (HTTP 4xx).</p>

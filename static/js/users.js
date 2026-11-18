@@ -2322,6 +2322,48 @@
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       }
     }
+
+    /* Always show a short text label under every action icon (icons alone
+       were guesswork: play = enable, gauge = reset data, …). */
+    html body .peer-card .peer-action-dock {
+      display: flex !important;
+      flex-wrap: wrap !important;
+      overflow: visible !important;
+      gap: 6px !important;
+      height: auto !important;
+    }
+    html body .peer-card .peer-actions-row {
+      height: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    html body .peer-card .peer-action-dock > button.peer-action-button {
+      display: inline-flex !important;
+      flex-direction: column !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 4px !important;
+      width: auto !important;
+      min-width: 66px !important;
+      height: auto !important;
+      min-height: 54px !important;
+      padding: 7px 8px !important;
+      flex: 1 1 66px !important;
+    }
+    html body .peer-card .peer-action-dock > button.peer-action-button[hidden] {
+      display: none !important;
+    }
+    html body .peer-card .peer-action-dock > button > .peer-action-label {
+      display: block !important;
+      font-size: 10.5px !important;
+      font-weight: 700 !important;
+      line-height: 1.15 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      max-width: 100% !important;
+      opacity: .9;
+    }
   `;
 
     document.head.appendChild(style);

@@ -14270,6 +14270,13 @@ def api_client_domain():
     return jsonify(ok=True, host=host)
 
 
+def _safe_endpoint_fallback(iface) -> str:
+    try:
+        return _endpoint_fallback(iface) or ''
+    except Exception:
+        return ''
+
+
 def _endpoint_fallback(iface) -> str:
 
     host = _client_domain() or _server_host()
@@ -23344,8 +23351,8 @@ def get_interfaces():
             'endpoint_port': int(i.endpoint_port) if getattr(i, 'endpoint_port', None) else None,
             'endpoint_override': override,
             'auto_endpoint': '',
-            'effective_endpoint': override,
-            'endpoint_source': 'override' if override else 'none',
+            'effective_endpoint': override or _safe_endpoint_fallback(i),
+            'endpoint_source': 'override' if override else 'auto',
         })
         out.append(row)
 

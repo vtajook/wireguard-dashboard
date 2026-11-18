@@ -178,3 +178,15 @@ input, select, button { font: inherit; color: inherit; }
 .ag-filters button b { font-weight: 600; color: var(--ag-muted); margin-inline-start: 4px; font-variant-numeric: tabular-nums; }
 .ag-filters button.active { background: var(--ag-accent); border-color: var(--ag-accent); color: #fff; }
 .ag-filters button.active b { color: rgba(255,255,255,.85); }
+
+.ag-ico { width: 32px; height: 30px; display: inline-grid; place-items: center; border-radius: 8px; border: 1px solid var(--ag-line); background: var(--ag-card); color: var(--ag-text); cursor: pointer; text-decoration: none; font-size: 13px; }
+.ag-ico:hover { background: var(--ag-soft); }
+.ag-ico.danger { color: var(--ag-bad); }
+.ag-ico.ok { color: var(--ag-ok); }
+.ag-ico:disabled { opacity: .5; }
+.ag-view { width: min(460px, calc(100vw - 32px)); }
+.ag-qr { display: block; width: min(320px, 100%); margin: 0 auto 8px; background: #fff; padding: 8px; border-radius: 10px; }
+.ag-events { display: grid; gap: 6px; max-height: 60vh; overflow: auto; margin-bottom: 10px; }
+.ag-events > div { display: grid; grid-template-columns: 110px 1fr; gap: 2px 10px; padding: 6px 0; border-bottom: 1px solid var(--ag-line); font-size: 13px; }
+.ag-events span { color: var(--ag-muted); font-variant-numeric: tabular-nums; }
+.ag-events small { grid-column: 2; color: var(--ag-muted); word-break: break-word; }

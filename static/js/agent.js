@@ -176,9 +176,9 @@
         const usage = size(p.used_bytes) + (p.limit_bytes ? " از " + size(p.limit_bytes) : " · نامحدود");
         const toggle =
           p.status === "online"
-            ? `<button class="ag-btn sm" data-act="off" data-id="${p.id}">غیرفعال</button>`
+            ? `<button class="ag-ico" data-act="off" data-id="${p.id}" title="غیرفعال کردن"><i class="fas fa-ban"></i></button>`
             : p.reseller_disabled
-              ? `<button class="ag-btn sm" data-act="on" data-id="${p.id}">فعال کن</button>`
+              ? `<button class="ag-ico ok" data-act="on" data-id="${p.id}" title="فعال کردن"><i class="fas fa-play"></i></button>`
               : "";
         return `<div class="ag-row">
           <div class="ag-namecell"><input type="checkbox" class="u-sel" data-id="${p.id}" ${SEL.has(p.id) ? "checked" : ""} aria-label="انتخاب"><div><div class="nm" title="${esc(p.name)}">${esc(p.name)}</div><div class="sub">${esc(p.iface)}</div></div></div>
@@ -186,13 +186,15 @@
           <div class="num">${remaining(p)}</div>
           <div class="num">${usage}</div>
           <div class="acts">
-            ${p.link ? `<a class="ag-btn sm" href="${esc(p.link)}" target="_blank" rel="noopener" title="صفحهٔ کاربر: QR، کانفیگ، حجم و زمان">باز کردن ساب</a><button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">کپی لینک</button>` : ""}
-            <a class="ag-btn sm" href="/api/agent/peer/${p.id}/config">کانفیگ</a>
-            <button class="ag-btn sm" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}">تغییر لینک</button>
-            ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن حجم/زمان</button>` : ""}
             <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
+            ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن</button>` : ""}
+            ${p.link ? `<a class="ag-ico" href="${esc(p.link)}" target="_blank" rel="noopener" title="باز کردن ساب (صفحهٔ کاربر)"><i class="fas fa-up-right-from-square"></i></a><button class="ag-ico" data-act="link" data-link="${esc(p.link)}" title="کپی لینک ساب"><i class="fas fa-link"></i></button>` : ""}
+            <button class="ag-ico" data-act="qr" data-id="${p.id}" data-name="${esc(p.name)}" title="QR کانفیگ"><i class="fas fa-qrcode"></i></button>
+            <a class="ag-ico" href="/api/agent/peer/${p.id}/config" title="دانلود کانفیگ"><i class="fas fa-download"></i></a>
+            <button class="ag-ico" data-act="events" data-id="${p.id}" data-name="${esc(p.name)}" title="رویدادها"><i class="fas fa-list"></i></button>
+            <button class="ag-ico" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}" title="تغییر لینک (لینک و کلید جدید)"><i class="fas fa-rotate"></i></button>
             ${toggle}
-            <button class="ag-btn sm danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}">حذف</button>
+            <button class="ag-ico danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}" title="حذف"><i class="fas fa-trash"></i></button>
           </div>
         </div>`;
       })
@@ -314,6 +316,22 @@
         b.disabled = true;
         await api(`/api/agent/peer/${id}/topup`, { method: "POST", body: JSON.stringify({ data_gb: m.number, months: Number(m.select) }) });
         toast("اضافه شد");
+      } else if (act === "qr") {
+        $("#v-title").textContent = "QR " + b.dataset.name;
+        $("#v-body").innerHTML = `<img class="ag-qr" alt="QR" src="/api/agent/peer/${id}/qr?t=${Date.now()}"><p class="ag-muted">با برنامهٔ وایرگارد اسکن کنید.</p>`;
+        $("#ag-view").showModal();
+        return;
+      } else if (act === "events") {
+        const j = await api(`/api/agent/peer/${id}/events`);
+        const EV = { created: "ساخته شد", reseller_created: "ساخته شد", enabled: "فعال شد", disabled: "غیرفعال شد", reseller_disabled: "غیرفعال توسط شما", reseller_suspended: "غیرفعال توسط مدیر", blocked: "مسدود شد", unblocked: "باز شد", expired: "منقضی شد", limit_reached: "حجم تمام شد", renewed: "تمدید شد", reseller_renewed: "تمدید شد", reseller_topup: "حجم/زمان اضافه شد", rotated: "لینک تغییر کرد", first_use: "اولین اتصال", data_reset: "حجم صفر شد", timer_reset: "زمان ریست شد" };
+        $("#v-title").textContent = "رویدادهای " + b.dataset.name;
+        $("#v-body").innerHTML = j.events.length
+          ? `<div class="ag-events">${j.events
+              .map((e) => `<div><span>${new Date(e.at * 1000).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" })}</span><b>${esc(EV[e.event] || e.event)}</b>${e.details ? `<small dir="auto">${esc(e.details)}</small>` : ""}</div>`)
+              .join("")}</div>`
+          : '<p class="ag-muted">رویدادی ثبت نشده</p>';
+        $("#ag-view").showModal();
+        return;
       } else if (act === "rotate") {
         const ok = await ask({
           title: "تغییر لینک " + b.dataset.name,

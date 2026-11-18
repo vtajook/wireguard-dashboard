@@ -35214,6 +35214,40 @@ def agent_rotate_peer(pid):
     return jsonify(ok=True, id=p.id, link=_shortlink_url(tok) if tok else '')
 
 
+@app.get('/api/agent/peer/<int:pid>/qr')
+@reseller_required
+def agent_peer_qr(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    cfg, err = _peer_client_conf_or_502(p)
+    if err is not None:
+        return err
+    img = qrcode.make(cfg)
+    buf = BytesIO()
+    img.save(buf, format='PNG')
+    buf.seek(0)
+    resp = send_file(buf, mimetype='image/png')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@app.get('/api/agent/peer/<int:pid>/events')
+@reseller_required
+def agent_peer_events(pid):
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    rows = (PeerEvent.query.filter(PeerEvent.peer_id == p.id)
+            .order_by(PeerEvent.id.desc()).limit(60).all())
+    hidden = {'reseller_created', 'reseller_renewed', 'reseller_topup'}
+    out = []
+    for e in rows:
+        details = e.details or ''
+        if e.event in hidden:
+            details = ''
+        out.append({'at': to_ts(e.timestamp), 'event': e.event, 'details': details[:300]})
+    return jsonify(ok=True, events=out)
+
+
 @app.get('/api/agent/peer/<int:pid>/config')
 @reseller_required
 def agent_peer_config(pid):

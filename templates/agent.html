@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>پنل نمایندگی</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/agent.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
 </head>
 <body>
   <header class="ag-top">
@@ -119,6 +120,13 @@ GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>
       <select id="d-select" hidden></select>
       <label id="d-num-wrap" class="ag-dlg-num" hidden><span id="d-num-label"></span><input id="d-num" type="number" min="0" step="1" dir="ltr"></label>
       <footer><button value="cancel" class="ag-btn ghost">انصراف</button><button value="ok" class="ag-btn primary" id="d-ok">تأیید</button></footer>
+    </form>
+  </dialog>
+  <dialog id="ag-view" class="ag-dialog ag-view">
+    <form method="dialog">
+      <h3 id="v-title"></h3>
+      <div id="v-body"></div>
+      <footer><button value="cancel" class="ag-btn ghost">بستن</button></footer>
     </form>
   </dialog>
   <div id="ag-toast" class="ag-toast" role="status" aria-live="polite"></div>

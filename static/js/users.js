@@ -3155,6 +3155,73 @@
   `;
   }
 
+  let lastFullRefreshAt = 0;
+  const LITE_FULL_EVERY_MS = 60000;   // big interfaces: full list once a minute
+  const LITE_MIN_PEERS = 400;
+
+  /* [perf] On big interfaces the 5-second auto refresh used to download and
+     re-process ALL peers (≈4 MB for 2700 peers) every time. Now it fetches
+     only the cards that are on screen (?ids=…) and merges them; the full list
+     is reloaded once a minute and on every explicit refresh / action. */
+  async function liteRefresh(container, ifaceId, signal) {
+    const cards = Array.from(container.querySelectorAll(".peer-card")).filter((c) => c.style.display !== "none");
+    const ids = cards.map((c) => String(c.dataset.id || "")).filter((x) => /^\d+$/.test(x));
+    if (!ids.length || ids.length > 300) return false;
+    const url = new URL("/api/peers", window.location.origin);
+    if (ifaceId) url.searchParams.set("iface_id", String(ifaceId));
+    url.searchParams.set("ids", ids.join(","));
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const fresh = data?.peers || [];
+    const byKey = new Map(fresh.map((p) => [peerDomKey(p), p]));
+    const all = window._peers || [];
+    for (let i = 0; i < all.length; i++) {
+      const np = byKey.get(peerDomKey(all[i]));
+      if (np) all[i] = np;
+    }
+    for (const card of cards) {
+      const p = byKey.get(String(card.dataset.id || ""));
+      if (p) updateCard(card, p, Number(card.dataset.order || 0));
+    }
+    renderPeerSummary(all);
+    return true;
+  }
+
+  /* After a single-peer action on a big local interface, reload only that
+     peer instead of the whole list (which made every click take seconds). */
+  async function refreshOnePeer(id) {
+    try {
+      if (getScopeId() || !/^\d+$/.test(String(id)) || (window._peers || []).length < LITE_MIN_PEERS) return false;
+      const url = new URL("/api/peers", window.location.origin);
+      if (SELECTED_IFACE_ID) url.searchParams.set("iface_id", String(SELECTED_IFACE_ID));
+      url.searchParams.set("ids", String(id));
+      const res = await fetch(url.toString(), { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" } });
+      if (!res.ok) return false;
+      const p = ((await res.json())?.peers || [])[0];
+      if (!p) return false;
+      const all = window._peers || [];
+      const k = peerDomKey(p);
+      const idx = all.findIndex((x) => peerDomKey(x) === k);
+      if (idx >= 0) all[idx] = p;
+      const card = document.querySelector(`.peer-card[data-id="${CSS.escape(k)}"]`);
+      if (card) {
+        updateCard(card, p, Number(card.dataset.order || 0));
+        card.dataset._match = matchPeer(card) ? "1" : "0";
+      }
+      renderPeerSummary(all);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   let refreshTimer = null,
     isRefreshing = false,
     firstLoad = false,
@@ -3354,6 +3421,18 @@
     }, timeoutMs);
 
     try {
+      if (
+        quiet &&
+        !scopeId &&
+        container &&
+        (window._peers || []).length >= LITE_MIN_PEERS &&
+        Date.now() - lastFullRefreshAt < LITE_FULL_EVERY_MS
+      ) {
+        if (await liteRefresh(container, ifaceId, signal)) {
+          refreshDelay = 5000;
+          return;
+        }
+      }
       const base = scopeId
         ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
         : "/api/peers";
@@ -3379,6 +3458,7 @@
 
       const data = await res.json();
       const peers = data?.peers || [];
+      lastFullRefreshAt = Date.now();
       if (
         peers[0]?.display_timezone &&
         typeof window.wgPanelApplyTimezone === "function"
@@ -3661,9 +3741,11 @@
         }
       }
 
-      await refreshPeers({
-        abortPrev: true,
-      });
+      if (!(pathId && (await refreshOnePeer(decodeURIComponent(pathId))))) {
+        await refreshPeers({
+          abortPrev: true,
+        });
+      }
 
       return payload;
     } catch (error) {

@@ -21950,8 +21950,8 @@ def _peers_response_cache(fn):
     def wrapper(*args, **kwargs):
         if _PEERS_CACHE_TTL <= 0 or request.method != 'GET':
             return fn(*args, **kwargs)
-        if request.args.get('id') or request.args.get('name'):
-            return fn(*args, **kwargs)   # tiny single-peer answer, no cache file
+        if request.args.get('id') or request.args.get('name') or request.args.get('ids'):
+            return fn(*args, **kwargs)   # tiny answer (one peer / visible page), no cache file
         import hashlib as _hashlib
         items = sorted((k, v) for k, v in request.args.items(multi=True) if k != '_')
         key = _hashlib.sha1(repr(items).encode()).hexdigest()[:16]
@@ -22011,12 +22011,20 @@ def panel_peers():
     # Single-peer lookups for API clients (bot): /api/peers?name=X or ?id=N
     peer_id_filter = request.args.get('id', type=int)
     peer_name_filter = (request.args.get('name') or '').strip()
+    # ?ids=1,2,3 : only these peers (the page refreshes just the visible cards)
+    peer_ids_filter = []
+    for _x in (request.args.get('ids') or '').split(',')[:500]:
+        _x = _x.strip()
+        if _x.isdigit():
+            peer_ids_filter.append(int(_x))
 
     try:
         query = Peer.query
 
         if peer_id_filter is not None:
             query = query.filter(Peer.id == peer_id_filter)
+        if peer_ids_filter:
+            query = query.filter(Peer.id.in_(peer_ids_filter))
         if peer_name_filter:
             query = query.filter(func.lower(Peer.name) == peer_name_filter.lower())
 

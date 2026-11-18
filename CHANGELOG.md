@@ -3,6 +3,17 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — faster peers page on big interfaces
+
+- Measured on the live server: the full peer list of wg0 (2737 peers) is
+  3.8 MB and takes 1.3 s to build; the page downloaded and re-processed it
+  every 5 seconds, and again after every click.
+- Now, on interfaces with 400+ peers, the 5-second auto refresh asks only for
+  the peers visible on screen (`/api/peers?ids=…`, a few KB) and the full list
+  is reloaded once a minute or on an explicit refresh / interface change.
+- Enable / disable / reset on one peer reloads just that peer.
+- New read-only `scripts/speed_diag.py`.
+
 ## 2026-11-18 — safer peer card buttons
 
 - Every action icon on a peer card now shows its name under it.

@@ -2,6 +2,29 @@
 
 وایرگارد داشبورد — پنل مدیریت وایرگارد
 
+## نصب سریع
+
+<div dir="rtl" align="right">
+
+روی سرور Ubuntu/Debian با کاربر root این یک خط را بزنید. منوی نصب باز می‌شود؛ گزینهٔ <b>install everything</b> پیش‌نیازها را نصب، پروژه را از همین گیت‌هاب دریافت و سرویس پنل را راه‌اندازی می‌کند:
+
+</div>
+
+```
+sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/wg.sh)"'
+```
+
+<div dir="rtl" align="right">
+
+<b>آپدیت:</b> از داخل پنل ← <b>Update Center</b> (کاربران قطع نمی‌شوند). اجرای دوبارهٔ همین دستور هم منو را برای آپدیت/تعمیر باز می‌کند.<br>
+<b>نصب نود (سرور دوم):</b>
+
+</div>
+
+```
+sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/vtajook/wireguard-dashboard/refs/heads/main/agent/node.sh)"'
+```
+
 ---
 
 **امکانات**

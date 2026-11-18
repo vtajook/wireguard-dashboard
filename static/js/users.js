@@ -2357,10 +2357,12 @@
       display: block !important;
       font-size: 10.5px !important;
       font-weight: 700 !important;
-      line-height: 1.15 !important;
-      white-space: nowrap !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
+      line-height: 1.2 !important;
+      white-space: normal !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
+      text-align: center !important;
+      word-break: keep-all !important;
       max-width: 100% !important;
       opacity: .9;
     }

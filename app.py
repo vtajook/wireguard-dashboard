@@ -22439,6 +22439,145 @@ def panel_peers():
 
 # ------------
 # Bulk create
+_PEERS_PAGE_PARSED = {}
+
+
+def _peers_full_list_for_iface(iface_id):
+    """Full /api/peers rows of one interface, through the shared response
+    cache, parsed once per cache file version (per worker). Rows are reused
+    for up to 8 s unless a write request changed something (cache gen)."""
+    hit = _PEERS_PAGE_PARSED.get(int(iface_id))
+    try:
+        gen = _peers_cache_gen()
+    except Exception:
+        gen = None
+    if hit and len(hit) > 2 and time.monotonic() - hit[2] < 8 and hit[3] == gen:
+        return hit[1]
+    fn = getattr(panel_peers, '__wrapped__', panel_peers)   # skip auth, keep cache
+    with app.test_request_context(f'/api/peers?iface_id={int(iface_id)}', method='GET'):
+        resp = app.make_response(fn())
+        body = resp.get_data()
+    if resp.status_code != 200:
+        return None
+    import hashlib as _hl
+    key = (int(iface_id), len(body), _hl.sha1(body[:4096] + body[-4096:]).hexdigest())
+    if hit and hit[0] == key:
+        _PEERS_PAGE_PARSED[int(iface_id)] = (key, hit[1], time.monotonic(), gen)
+        return hit[1]
+    rows = (json.loads(body) or {}).get('peers') or []
+    _PEERS_PAGE_PARSED[int(iface_id)] = (key, rows, time.monotonic(), gen)
+    return rows
+
+
+def _pp_num(v, default=None):
+    try:
+        if v is None or v == '':
+            return default
+        n = float(v)
+        return n if n == n else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _pp_classify(p, now):
+    """Same rules as the peers page (users.js) so counts and filters match."""
+    conn = str(p.get('conn_status') or p.get('connection_status') or 'offline').lower() == 'online'
+    panel = str(p.get('status') or p.get('panel_status') or 'offline').lower()
+    blocked = panel == 'blocked'
+    unlimited = bool(p.get('unlimited'))
+    lim = _pp_num(p.get('data_limit'), 0) or 0
+    lim_mib = lim * 1024 if p.get('limit_unit') == 'Gi' else lim
+    no_cap = unlimited or not (lim > 0)
+    used = 0.0
+    for k in ('used_effective_bytes', 'used_bytes_total', 'used_bytes', 'used_bytes_db'):
+        if p.get(k) is not None:
+            used = max(0.0, _pp_num(p.get(k), 0) or 0)
+            break
+    ttl = _pp_num(p.get('ttl_seconds'))
+    depleting = False
+    if not blocked and not unlimited:
+        data_low = (not no_cap) and lim_mib > 0 and max(0.0, lim_mib - used / 1048576) <= max(50.0, lim_mib * 0.15)
+        time_low = ttl is not None and 0 < ttl <= 86400
+        depleting = bool(data_low or time_low)
+    sb = _pp_num(p.get('shared_block_until'), 0) or 0
+    sl = _pp_num(p.get('shared_last_at'), 0) or 0
+    multi = sb > now or (sl > 0 and now - sl < 86400)
+    started = (not p.get('start_on_first_use')) or bool(p.get('first_used_at_ts') or p.get('first_used_at'))
+    expiry = _pp_num(p.get('expires_at_ts'), 0) or 0
+    if not unlimited and started and ttl is not None:
+        expiry = now + max(0, int(ttl))
+    return {'online': conn, 'panel': panel, 'blocked': blocked, 'depleting': depleting,
+            'multi': multi, 'expiry': expiry, 'used': used,
+            'created': _pp_num(p.get('created_at_ts'), 0) or 0}
+
+
+@app.get('/api/peers/page')
+@require_api_key_or_login
+def panel_peers_page():
+    """Server-side search / filter / sort / pagination for the peers page.
+    ?iface_id=&page=&per=&q=&status=&sort=  ->  one page of peers, counts for
+    the summary, and the ids of every matching peer (for "select all")."""
+    iface_id = request.args.get('iface_id', type=int)
+    if not iface_id:
+        return jsonify(ok=False, error='iface_id_required'), 400
+    rows = _peers_full_list_for_iface(iface_id)
+    if rows is None:
+        return jsonify(ok=False, error='peer_query_failed', peers=[]), 200
+    now = time.time()
+    page = max(1, request.args.get('page', 1, type=int))
+    per = min(200, max(1, request.args.get('per', 8, type=int)))
+    q = (request.args.get('q') or '').strip().lower()
+    st = (request.args.get('status') or '').strip().lower()
+    sort = (request.args.get('sort') or 'default').strip().lower()
+
+    counts = {'total': 0, 'online': 0, 'offline': 0, 'enabled': 0, 'disabled': 0,
+              'blocked': 0, 'depleting': 0, 'multi': 0}
+    matched = []
+    for i, p in enumerate(rows):
+        c = _pp_classify(p, now)
+        counts['total'] += 1
+        counts['online' if c['online'] else 'offline'] += 1
+        counts['enabled' if c['panel'] == 'online' else 'disabled'] += 1
+        if c['blocked']:
+            counts['blocked'] += 1
+        if c['depleting']:
+            counts['depleting'] += 1
+        if c['multi']:
+            counts['multi'] += 1
+        ok = (not st or (st == 'online' and c['online']) or (st == 'offline' and not c['online'])
+              or (st == 'depleting' and c['depleting']) or (st == 'blocked' and c['blocked'])
+              or (st == 'multi' and c['multi']) or (st == 'enabled' and c['panel'] == 'online')
+              or (st == 'disabled' and c['panel'] != 'online'))
+        if ok and q:
+            hay = ' '.join(str(p.get(k) or '') for k in
+                           ('name', 'phone_number', 'telegram_id', 'address', 'endpoint', 'iface')).lower()
+            ok = q in hay
+        if ok:
+            matched.append((i, p, c))
+
+    if sort == 'name':
+        matched.sort(key=lambda t: str(t[1].get('name') or '').lower())
+    elif sort == 'created':
+        matched.sort(key=lambda t: -t[2]['created'])
+    elif sort == 'usage':
+        matched.sort(key=lambda t: -t[2]['used'])
+    elif sort == 'expiry':
+        matched.sort(key=lambda t: t[2]['expiry'] or float('inf'))
+    elif sort == 'attention':
+        def _rank(c):
+            return 0 if c['blocked'] else 1 if c['depleting'] else 2 if not c['online'] else 3
+        matched.sort(key=lambda t: (_rank(t[2]), t[0]))
+
+    total = len(matched)
+    pages = max(1, -(-total // per))
+    page = min(page, pages)
+    chunk = matched[(page - 1) * per: page * per]
+    body = json.dumps({'ok': True, 'page': page, 'per': per, 'pages': pages, 'total': total,
+                       'counts': counts, 'ids': [t[1].get('id') for t in matched],
+                       'peers': [t[1] for t in chunk]}, separators=(',', ':')).encode()
+    return _json_bytes_response(body)
+
+
 # ____________
 @csrf.exempt
 @app.route('/api/peers/bulk', methods=['POST'])

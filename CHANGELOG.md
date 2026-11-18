@@ -3,6 +3,17 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — peers page: server-side paging
+
+- Local interfaces: search, status filter, sort and paging now run on the
+  server (`GET /api/peers/page?iface_id=&page=&per=&q=&status=&sort=`). The
+  browser receives only the visible page (8–50 peers) plus summary counts and
+  the ids of all matching peers (for "Select all in this filter"), instead of
+  every peer of the interface (≈4 MB for 2700 peers) on each refresh.
+- The server builds the full list at most every ~8 s (or right after a change)
+  and slices pages from it, so many open tabs do not multiply the work.
+- Node scopes keep the previous full-list behaviour.
+
 ## 2026-11-18 — faster peers page on big interfaces
 
 - Measured on the live server: the full peer list of wg0 (2737 peers) is

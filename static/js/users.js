@@ -2803,7 +2803,7 @@
     const box = ensurePeerSummary();
     if (!box) return;
 
-    const c = peerTagCounts(peers || []);
+    const c = window._wgpServerCounts || peerTagCounts(peers || []);
     const pct = (value, total) => total > 0 ? Math.round((value / total) * 100) : 0;
     const set = (id, val) => {
       const el = document.getElementById(id);
@@ -3052,7 +3052,46 @@
     return cards;
   }
 
+  /* ---------- server-side paging (local interfaces) ----------
+     The server filters, sorts and pages (/api/peers/page). The browser only
+     receives and renders the current page (8-50 peers) instead of the whole
+     interface (≈4 MB for 2700 peers). Node scopes keep the old full list. */
+  let PAGED = null;            // {total, pages, ids, counts} of the last answer
+  let pagedReloadTimer = null;
+  function isPagedMode() {
+    return !getScopeId() && !!SELECTED_IFACE_ID;
+  }
+  function schedulePagedReload(delay = 120) {
+    clearTimeout(pagedReloadTimer);
+    pagedReloadTimer = setTimeout(() => refreshPeers({ abortPrev: true }), delay);
+  }
+  function pagedShowCards(cont, peers) {
+    const order = new Map(peers.map((p, i) => [peerDomKey(p), i]));
+    const cards = $$(".peer-card", cont);
+    cards
+      .filter((c) => order.has(String(c.dataset.id || "")))
+      .sort((a, b) => order.get(String(a.dataset.id)) - order.get(String(b.dataset.id)))
+      .forEach((c) => {
+        cont.appendChild(c);
+        c.dataset._match = "1";
+        c.style.display = "";
+        wgpFlushCard(c);
+      });
+    cards.forEach((c) => {
+      if (!order.has(String(c.dataset.id || ""))) c.remove();
+    });
+    renderPager(PAGED ? PAGED.pages : 1);
+    wgpSyncBulkBar();
+    syncPeerSummaryFilterState();
+  }
+
   function applyPagi() {
+    if (isPagedMode()) {
+      schedulePagedReload();
+      return;
+    }
+    PAGED = null;
+    window._wgpServerCounts = null;
     const cont = $(".peers-container");
     if (!cont) return;
     const cards = sortPeerCards($$(".peer-card", cont));
@@ -3131,7 +3170,7 @@
     bar.dataset.total = String(total);
 
     const cards = $$(".peer-card", $(".peers-container") || document);
-    const matched = cards.filter((c) => c.dataset._match === "1").length;
+    const matched = PAGED ? PAGED.total : cards.filter((c) => c.dataset._match === "1").length;
     const from = matched ? (cur - 1) * pagination.pageSize + 1 : 0;
     const to = Math.min(matched, cur * pagination.pageSize);
 
@@ -3421,21 +3460,12 @@
     }, timeoutMs);
 
     try {
-      if (
-        quiet &&
-        !scopeId &&
-        container &&
-        (window._peers || []).length >= LITE_MIN_PEERS &&
-        Date.now() - lastFullRefreshAt < LITE_FULL_EVERY_MS
-      ) {
-        if (await liteRefresh(container, ifaceId, signal)) {
-          refreshDelay = 5000;
-          return;
-        }
-      }
+      const paged = !scopeId && !!ifaceId;
       const base = scopeId
         ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
-        : "/api/peers";
+        : paged
+          ? "/api/peers/page"
+          : "/api/peers";
 
       const url = new URL(base, window.location.origin);
 
@@ -3445,6 +3475,13 @@
         }
       } else {
         if (ifaceId) url.searchParams.set("iface_id", String(ifaceId));
+        if (paged) {
+          url.searchParams.set("page", String(pagination.page || 1));
+          url.searchParams.set("per", String(pagination.pageSize || 8));
+          if (filters.q) url.searchParams.set("q", filters.q);
+          if (filters.status) url.searchParams.set("status", filters.status);
+          if (filters.sort && filters.sort !== "default") url.searchParams.set("sort", filters.sort);
+        }
       }
 
       const res = await fetch(url.toString(), {
@@ -3459,6 +3496,17 @@
       const data = await res.json();
       const peers = data?.peers || [];
       lastFullRefreshAt = Date.now();
+      if (paged) {
+        PAGED = { total: Number(data.total || 0), pages: Number(data.pages || 1), ids: (data.ids || []).map(String), counts: data.counts || null };
+        window._wgpServerCounts = data.counts || null;
+        if (Number(data.page) && Number(data.page) !== pagination.page) {
+          pagination.page = Number(data.page);
+          savePagination();
+        }
+      } else {
+        PAGED = null;
+        window._wgpServerCounts = null;
+      }
       if (
         peers[0]?.display_timezone &&
         typeof window.wgPanelApplyTimezone === "function"
@@ -3550,7 +3598,10 @@
         for (const [, leftover] of existing) leftover.remove();
       }
 
-      if (quiet) {
+      if (paged && container) {
+        pagedShowCards(container, peers);
+        if (quiet) restorePeerScrollAnchor(container, scrollAnchor);
+      } else if (quiet) {
         const cards = Array.from(container.querySelectorAll('.peer-card'));
         for (const card of cards) card.dataset._match = matchPeer(card) ? '1' : '0';
         const filtered = cards.filter(card => card.dataset._match === '1');
@@ -6177,17 +6228,24 @@
     const bar = document.getElementById("wgp-bulkbar");
     if (!bar) return;
     const cont = $(".peers-container");
-    const present = new Set(cont ? $$(".peer-card", cont).map((c) => String(c.dataset.id || "")) : []);
-    for (const id of Array.from(WGP_SELECTED)) if (!present.has(id)) WGP_SELECTED.delete(id);
-    const matching = wgpMatchingCards();
-    const allSel = matching.length > 0 && matching.every((c) => WGP_SELECTED.has(String(c.dataset.id || "")));
+    let matchIds;
+    if (PAGED) {
+      matchIds = PAGED.ids;
+      const valid = new Set(matchIds);
+      for (const id of Array.from(WGP_SELECTED)) if (!valid.has(id)) WGP_SELECTED.delete(id);
+    } else {
+      const present = new Set(cont ? $$(".peer-card", cont).map((c) => String(c.dataset.id || "")) : []);
+      for (const id of Array.from(WGP_SELECTED)) if (!present.has(id)) WGP_SELECTED.delete(id);
+      matchIds = wgpMatchingCards().map((c) => String(c.dataset.id || ""));
+    }
+    const allSel = matchIds.length > 0 && matchIds.every((id) => WGP_SELECTED.has(id));
     const all = bar.querySelector("#wgp-select-all");
     if (all) {
       all.checked = allSel;
-      all.indeterminate = !allSel && matching.some((c) => WGP_SELECTED.has(String(c.dataset.id || "")));
+      all.indeterminate = !allSel && matchIds.some((id) => WGP_SELECTED.has(id));
     }
     const lbl = bar.querySelector("#wgp-select-all-label");
-    if (lbl) lbl.textContent = `Select all in this filter (${matching.length})`;
+    if (lbl) lbl.textContent = `Select all in this filter (${matchIds.length})`;
     const cnt = bar.querySelector(".wgp-count");
     if (cnt) cnt.textContent = `${WGP_SELECTED.size} selected`;
     const del = bar.querySelector("#wgp-bulk-delete");
@@ -6270,8 +6328,8 @@
 
     bar.querySelector("#wgp-select-all").addEventListener("change", (e) => {
       const on = e.target.checked;
-      for (const c of wgpMatchingCards()) {
-        const id = String(c.dataset.id || "");
+      const ids = PAGED ? PAGED.ids : wgpMatchingCards().map((c) => String(c.dataset.id || ""));
+      for (const id of ids) {
         if (on) WGP_SELECTED.add(id); else WGP_SELECTED.delete(id);
       }
       wgpSyncBulkBar();

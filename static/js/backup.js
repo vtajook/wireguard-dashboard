@@ -223,7 +223,7 @@
 
   function updateStatus() {
     if (!pillStatus) return;
-    const any = [pillFull, pillDb, pillSettings].some((p) => p && !p.textContent.includes("No backup"));
+    const any = [pillFull, pillDb, pillSettings].some((p) => p && !p.textContent.includes("No backup") && !p.textContent.includes("بکاپی نیست"));
     pillStatus.textContent = any ? "Status: Ready" : "Status: No backup";
     pillStatus.className = "bk-pill " + (any ? "ok" : "muted");
   }

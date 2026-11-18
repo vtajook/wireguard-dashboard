@@ -3,6 +3,15 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-18 — Persian (فارسی) language
+
+- New **فارسی / English** button in the top bar (and the mobile top bar).
+  The choice is saved per browser. With Persian, every admin page, dialog,
+  toast and confirmation is shown in Persian (about 3,300 UI strings in
+  `static/js/i18n-fa.js`, loaded only when Persian is chosen). User data —
+  peer names, IPs, notes — is never changed. Layout stays left-to-right.
+- Also on the login and first-setup pages. Customer link pages are unchanged.
+
 ## 2026-11-18 — update reload fix, sidebar handle
 
 - After an update the page reloaded before the panel had actually restarted

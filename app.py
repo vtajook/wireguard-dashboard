@@ -14226,9 +14226,53 @@ def _norm_hostport(host: str, port: int | None) -> str:
         pass
     return f'{host}:{port}'
 
+_CLIENT_DOMAIN_FILE = os.path.join(app.instance_path, 'client_domain.json')
+_CLIENT_DOMAIN_MEMO = {'ts': 0.0, 'val': ''}
+
+
+def _client_domain() -> str:
+    """Admin-set config delivery domain (Settings → TLS card), '' if unset."""
+    now = time.monotonic()
+    if now - _CLIENT_DOMAIN_MEMO['ts'] < 5.0:
+        return _CLIENT_DOMAIN_MEMO['val']
+    val = ''
+    try:
+        with open(_CLIENT_DOMAIN_FILE, encoding='utf-8') as fh:
+            val = str((json.load(fh) or {}).get('host') or '').strip()
+    except Exception:
+        val = ''
+    _CLIENT_DOMAIN_MEMO.update(ts=now, val=val)
+    return val
+
+
+@app.route('/api/client_domain', methods=['GET', 'POST'])
+@login_required
+def api_client_domain():
+    if request.method == 'GET':
+        return jsonify(ok=True, host=_client_domain())
+    host = str((request.get_json(silent=True) or {}).get('host') or '').strip().lower()
+    host = re.sub(r'^[a-z]+://', '', host).split('/')[0]
+    if host and ':' in host and not host.startswith('['):
+        host = host.rsplit(':', 1)[0]     # port comes from each interface
+    if host and not re.fullmatch(r'[a-z0-9.-]{1,253}|\[[0-9a-f:]+\]', host):
+        return jsonify(ok=False, error='invalid_host', detail='Enter a domain like wg.example.com or an IP.'), 400
+    tmp = _CLIENT_DOMAIN_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump({'host': host}, fh)
+    os.replace(tmp, _CLIENT_DOMAIN_FILE)
+    _CLIENT_DOMAIN_MEMO.update(ts=0.0)
+    _SERVER_HOST_MEMO['ts'] = 0
+    try:
+        _peers_cache_bump()
+    except Exception:
+        pass
+    logpanel_action('client_domain_set', f'host={host or "-"}')
+    return jsonify(ok=True, host=host)
+
+
 def _endpoint_fallback(iface) -> str:
 
-    host = _server_host()
+    host = _client_domain() or _server_host()
     port = getattr(iface, 'listen_port', None)
     return _norm_hostport(host, port) if host and port else ''
 
@@ -34789,7 +34833,7 @@ def _rs_client_endpoint(iface):
     interface already use (what the admin / bot sets, e.g. a domain), so an
     agent's users never get the bare server IP."""
     try:
-        if iface_endpoint_override(iface):
+        if iface_endpoint_override(iface) or _client_domain():
             return ''
     except Exception:
         pass

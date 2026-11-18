@@ -31,6 +31,20 @@
 
 ---
 
+## تصاویر
+
+<div dir="rtl" align="right">
+
+| داشبورد و ترافیک کاربران | کاربران |
+|---|---|
+| <img src="docs/screenshots/dashboard.png" width="360"> | <img src="docs/screenshots/users.png" width="360"> |
+| **پنل نمایندگان** | **بکاپ خودکار** |
+| <img src="docs/screenshots/resellers.png" width="360"> | <img src="docs/screenshots/backup.png" width="360"> |
+
+</div>
+
+---
+
 ## نصب
 
 <div dir="rtl" align="right">

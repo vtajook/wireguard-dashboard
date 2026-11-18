@@ -7,7 +7,7 @@
   const confirmBox = (o) => (window.wgConfirm ? window.wgConfirm(o) : Promise.resolve(confirm(o.body || o.title)));
   const promptBox = (o) => (window.wgConfirm ? window.wgConfirm(o) : Promise.resolve(prompt(o.body || o.title, o.value || "")));
   const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "—");
-  const KIND = { charge: "Charge", adjust: "Deduct", create: "Create", renew: "Renew", refund: "Refund", test: "Test" };
+  const KIND = { charge: "Charge", adjust: "Deduct", create: "Create", renew: "Renew", refund: "Refund", test: "Test", topup: "Top-up" };
 
   let DATA = { resellers: [], ifaces: [] };
   let editing = null;

@@ -166,3 +166,9 @@ input, select, button { font: inherit; color: inherit; }
 .ag-api-doc { margin-top: 14px; font-size: 12px; }
 .ag-api-doc pre { background: var(--ag-soft); padding: 12px; border-radius: 10px; overflow-x: auto; line-height: 1.7; }
 .ag-api-doc code { background: var(--ag-soft); padding: 1px 6px; border-radius: 5px; }
+
+.ag-namecell { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.ag-namecell > div { min-width: 0; }
+.ag-selall { display: flex; gap: 6px; align-items: center; font-size: 13px; white-space: nowrap; }
+.ag-list-tools { margin-inline-start: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.ag-list-head { flex-wrap: wrap; }

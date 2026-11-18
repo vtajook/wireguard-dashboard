@@ -34603,7 +34603,7 @@ def _rs_public(r, with_stats=True):
         since = datetime.utcnow() - timedelta(days=30)
         spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
                  .filter(ResellerTxn.reseller_id == r.id,
-                         ResellerTxn.kind.in_(('create', 'renew', 'refund')),
+                         ResellerTxn.kind.in_(('create', 'renew', 'topup', 'refund')),
                          ResellerTxn.at >= since).scalar()) or 0
         d['spent_30d'] = -int(spent)
     return d
@@ -34987,17 +34987,7 @@ def agent_delete_peer(pid):
     r = g.reseller
     p = _rs_own_peer(r, pid)
     name = p.name
-    refund = 0
-    try:
-        used = _accumulate_peer_usage(p)[0]
-    except Exception:
-        used = int(p.used_bytes_total or 0)
-    fresh = (now_ts() - (to_ts(p.created_at) or 0)) <= _RS_REFUND_HOURS * 3600
-    if fresh and not used and not p.first_used_at:
-        spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
-                 .filter(ResellerTxn.reseller_id == r.id, ResellerTxn.peer_id == p.id,
-                         ResellerTxn.kind.in_(('create', 'renew', 'refund'))).scalar()) or 0
-        refund = max(0, -int(spent))
+    refund = _rs_refund_for(r, p)
     code, body = _rs_internal(api_delete, f'/api/peer/{p.id}', {}, method='DELETE', pid=p.id)
     if code >= 400:
         return jsonify(ok=False, error=(body or {}).get('error') or 'delete_failed',
@@ -35012,6 +35002,153 @@ def agent_delete_peer(pid):
     except Exception:
         pass
     return jsonify(ok=True, refund=refund, balance=int(db.session.get(Reseller, r.id).balance or 0))
+
+
+def _rs_refund_for(r, p):
+    """Full refund only for a user that was never used and is < 48 h old."""
+    try:
+        used = _accumulate_peer_usage(p)[0]
+    except Exception:
+        used = int(p.used_bytes_total or 0)
+    fresh = (now_ts() - (to_ts(p.created_at) or 0)) <= _RS_REFUND_HOURS * 3600
+    if not (fresh and not used and not p.first_used_at):
+        return 0
+    spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
+             .filter(ResellerTxn.reseller_id == r.id, ResellerTxn.peer_id == p.id,
+                     ResellerTxn.kind.in_(('create', 'renew', 'topup', 'refund'))).scalar()) or 0
+    return max(0, -int(spent))
+
+
+def _rs_bulk_delete(r, peers, reason):
+    refunds = {p.id: (_rs_refund_for(r, p), p.name) for p in peers}
+    ids = [p.id for p in peers]
+    if not ids:
+        return 0, [], 0
+    deleted, failed = _bulk_delete_peer_ids(ids)
+    failed_ids = {int(f.get('id')) for f in failed if isinstance(f, dict) and f.get('id') is not None}
+    total_refund = 0
+    for pid, (amt, name) in refunds.items():
+        if amt and pid not in failed_ids and db.session.get(Peer, pid) is None:
+            _rs_give(r, amt)
+            t = _rs_txn(r, 'refund', amt, note=f'deleted unused {name}')
+            t.peer_id, t.peer_name = pid, name
+            db.session.commit()
+            total_refund += amt
+    try:
+        logpanel_action('reseller_bulk_delete', f'reseller={r.username}; reason={reason}; deleted={deleted}; failed={len(failed)}; refund={total_refund}')
+    except Exception:
+        pass
+    return deleted, failed, total_refund
+
+
+@app.post('/api/agent/peers/bulk_delete')
+@reseller_required
+def agent_bulk_delete():
+    r = g.reseller
+    ids = []
+    for x in ((request.get_json(silent=True) or {}).get('ids') or [])[:2000]:
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    peers = Peer.query.filter(Peer.reseller_id == r.id, Peer.id.in_(ids or [-1])).all()
+    if not peers:
+        return jsonify(ok=False, error='no_ids', detail='کاربری انتخاب نشده'), 400
+    try:
+        deleted, failed, refund = _rs_bulk_delete(r, peers, 'selected')
+    except _BulkDeleteDBError as exc:
+        return jsonify(ok=False, error='database', detail=str(exc.args[0])), 500
+    return jsonify(ok=not failed, deleted=deleted, failed=len(failed), refund=refund,
+                   balance=int(db.session.get(Reseller, r.id).balance or 0))
+
+
+@app.post('/api/agent/peers/delete_expired')
+@reseller_required
+def agent_delete_expired():
+    """{"dry_run": true} only counts. Deletes this agent's users whose time ran out."""
+    r = g.reseller
+    data = request.get_json(silent=True) or {}
+    now = now_ts()
+    expired = []
+    for p in Peer.query.filter(Peer.reseller_id == r.id).all():
+        try:
+            exp = _effective_expiry_ts(p)
+        except Exception:
+            exp = None
+        if exp is not None and exp <= now:
+            expired.append(p)
+    if str(data.get('dry_run', '')).lower() in ('1', 'true', 'yes') or not expired:
+        return jsonify(ok=True, dry_run=True, count=len(expired))
+    try:
+        deleted, failed, _refund = _rs_bulk_delete(r, expired, 'expired')
+    except _BulkDeleteDBError as exc:
+        return jsonify(ok=False, error='database', detail=str(exc.args[0])), 500
+    return jsonify(ok=not failed, deleted=deleted, failed=len(failed))
+
+
+@app.post('/api/agent/peer/<int:pid>/topup')
+@reseller_required
+def agent_topup_peer(pid):
+    """Volume users only: add GB and/or months without resetting usage.
+    {"data_gb": 5} costs 5 x price/GB; {"months": 1} costs 1 x extra-month
+    price (or price/month when no extra-month price is set)."""
+    r = g.reseller
+    p = _rs_own_peer(r, pid)
+    if not p.data_limit_value:
+        return jsonify(ok=False, error='not_volume', detail='افزودن فقط برای کاربران حجمی است؛ برای نامحدود از تمدید استفاده کنید'), 400
+    data = request.get_json(silent=True) or {}
+    try:
+        add_gb = max(0.0, min(10000.0, float(data.get('data_gb') or 0)))
+        months = int(data.get('months') or 0)
+    except (TypeError, ValueError):
+        return jsonify(ok=False, error='invalid'), 400
+    if months < 0 or months > 12:
+        return jsonify(ok=False, error='invalid_months'), 400
+    if add_gb <= 0 and months <= 0:
+        return jsonify(ok=False, error='nothing', detail='حجم یا ماه اضافه را وارد کنید'), 400
+    month_price = int(r.extra_month_price or 0) or int(r.price_per_month or 0)
+    cost = int(round(float(r.price_per_gb or 0) * add_gb)) + months * month_price
+    if cost > 0 and not _rs_take(r, cost):
+        return jsonify(ok=False, error='low_balance',
+                       detail=f'موجودی کافی نیست. هزینه: {cost:,} تومان، موجودی: {int(r.balance or 0):,} تومان'), 402
+    payload = {}
+    if add_gb:
+        try:
+            cur_gb = (p.limit_bytes() or 0) / 1073741824
+        except Exception:
+            cur_gb = 0.0
+        payload['data_limit_value'] = round(cur_gb + add_gb, 3)
+        payload['data_limit_unit'] = 'Gi'
+    if months:
+        try:
+            started = _timer_anchor_ts(p) is not None
+        except Exception:
+            started = True
+        if started:
+            exp = _effective_expiry_ts(p) or now_ts()
+            remaining = max(0.0, (exp - now_ts()) / 86400.0)
+            payload['time_limit_days'] = round(remaining + 30.0 * months, 6)
+            payload['renew'] = True
+        else:
+            payload['time_limit_days'] = float(p.time_limit_days or 0) + 30.0 * months
+    try:
+        code, body = _rs_internal(api_edit, f'/api/peer/{p.id}', payload, method='PUT', pid=p.id)
+    except Exception as exc:
+        code, body = 500, {'detail': str(exc)}
+    if code >= 400 or (isinstance(body, dict) and body.get('ok') is False and body.get('success') is not True):
+        db.session.rollback()
+        if cost > 0:
+            _rs_give(r, cost)
+        return jsonify(ok=False, error='topup_failed', detail=(body or {}).get('detail') or 'انجام نشد؛ هزینه برگشت داده شد'), 502
+    p = db.session.get(Peer, pid)
+    note = ' + '.join(x for x in ((f'{add_gb:g} GB' if add_gb else ''), (f'{months} mo' if months else '')) if x)
+    _rs_txn(r, 'topup', -cost, peer=p, months=months, note=note)
+    try:
+        log_event(p, 'reseller_topup', f'reseller={r.username}; {note}; cost={cost}')
+        logpanel_action('reseller_peer_topup', f'reseller={r.username}; pid={p.id}; {note}; cost={cost}')
+    except Exception:
+        pass
+    return jsonify(ok=True, cost=cost, balance=int(db.session.get(Reseller, r.id).balance or 0))
 
 
 @app.post('/api/agent/peer/<int:pid>/rotate')

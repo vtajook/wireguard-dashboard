@@ -55,8 +55,13 @@
 
     <section class="ag-card" id="tab-users">
       <div class="ag-list-head">
+        <label class="ag-selall"><input type="checkbox" id="u-all"> همه</label>
         <input id="u-q" type="search" placeholder="جستجوی نام…" dir="ltr">
         <span id="u-total" class="ag-muted"></span>
+        <span class="ag-list-tools">
+          <button class="ag-btn sm danger" type="button" id="u-del-sel" disabled>حذف انتخاب‌شده‌ها</button>
+          <button class="ag-btn sm" type="button" id="u-del-exp">حذف منقضی‌ها</button>
+        </span>
       </div>
       <div id="u-list" class="ag-list"></div>
       <div class="ag-pager"><button class="ag-btn ghost" id="u-prev">قبلی</button><span id="u-page"></span><button class="ag-btn ghost" id="u-next">بعدی</button></div>
@@ -87,6 +92,9 @@ POST   /api/agent/peers                       → create
        ← {"ok":true,"id":12,"link":"https://…","cost":…,"balance":…}
 POST   /api/agent/peer/ID/renew               → {"months":1,"data_gb":50}
 POST   /api/agent/peer/ID/toggle              → {"enable":false}
+POST   /api/agent/peer/ID/topup               → volume users: {"data_gb":5,"months":0} (adds, keeps usage)
+POST   /api/agent/peers/bulk_delete           → {"ids":[1,2,3]}
+POST   /api/agent/peers/delete_expired        → {"dry_run":true} counts, {} deletes
 POST   /api/agent/peer/ID/rotate              → new link + keys (old config stops) ← {"link":"…"}
 DELETE /api/agent/peer/ID
 GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>

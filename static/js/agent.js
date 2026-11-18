@@ -4,7 +4,8 @@
   const fa = (n) => Number(n || 0).toLocaleString("fa-IR");
   const toman = (n) => fa(n) + " تومان";
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  const KIND = { charge: "شارژ", adjust: "کسر / اصلاح", create: "ساخت", renew: "تمدید", refund: "برگشت وجه", test: "تست" };
+  const KIND = { charge: "شارژ", adjust: "کسر / اصلاح", create: "ساخت", renew: "تمدید", refund: "برگشت وجه", test: "تست", topup: "افزودن حجم/زمان" };
+  const SEL = new Set();
   const MONTH_LABEL = (m) => (m === 12 ? "یک ساله" : fa(m) + " ماهه");
   let ME = null;
   let page = 1;
@@ -178,7 +179,7 @@
               ? `<button class="ag-btn sm" data-act="on" data-id="${p.id}">فعال کن</button>`
               : "";
         return `<div class="ag-row">
-          <div><div class="nm" title="${esc(p.name)}">${esc(p.name)}</div><div class="sub">${esc(p.iface)}</div></div>
+          <div class="ag-namecell"><input type="checkbox" class="u-sel" data-id="${p.id}" ${SEL.has(p.id) ? "checked" : ""} aria-label="انتخاب"><div><div class="nm" title="${esc(p.name)}">${esc(p.name)}</div><div class="sub">${esc(p.iface)}</div></div></div>
           <div>${statusBadge(p)}</div>
           <div class="num">${remaining(p)}</div>
           <div class="num">${usage}</div>
@@ -186,6 +187,7 @@
             ${p.link ? `<button class="ag-btn sm" data-act="link" data-link="${esc(p.link)}">لینک</button>` : ""}
             <a class="ag-btn sm" href="/api/agent/peer/${p.id}/config">کانفیگ</a>
             <button class="ag-btn sm" data-act="rotate" data-id="${p.id}" data-name="${esc(p.name)}">تغییر لینک</button>
+            ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن حجم/زمان</button>` : ""}
             <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
             ${toggle}
             <button class="ag-btn sm danger" data-act="del" data-id="${p.id}" data-name="${esc(p.name)}" data-fresh="${!p.started || !p.used_bytes ? 1 : 0}">حذف</button>
@@ -291,6 +293,25 @@
         b.disabled = true;
         await api(`/api/agent/peer/${id}/renew`, { method: "POST", body: JSON.stringify(payload) });
         toast("تمدید شد");
+      } else if (act === "topup") {
+        const monthPrice = ME.extra_month_price || ME.price_per_month || 0;
+        const base = "حجم و زمان باقی‌مانده حفظ می‌شود و مصرف صفر نمی‌شود.";
+        const m = await ask({
+          title: "افزودن به " + b.dataset.name,
+          body: base,
+          options: [0, 1, 2, 3, 6].map((x) => ({ value: x, label: x ? "+ " + MONTH_LABEL(x) : "بدون زمان اضافه" })),
+          number: { label: "حجم اضافه (گیگ)", value: 0 },
+          onChange: (v) => {
+            const cost = Math.round((ME.price_per_gb || 0) * v.number) + Number(v.select || 0) * monthPrice;
+            $("#d-body").textContent = base + "\nهزینه: " + toman(cost);
+          },
+          okText: "افزودن",
+        });
+        if (!m) return;
+        if (!m.number && !Number(m.select)) return toast("حجم یا زمان اضافه را انتخاب کنید", true);
+        b.disabled = true;
+        await api(`/api/agent/peer/${id}/topup`, { method: "POST", body: JSON.stringify({ data_gb: m.number, months: Number(m.select) }) });
+        toast("اضافه شد");
       } else if (act === "rotate") {
         const ok = await ask({
           title: "تغییر لینک " + b.dataset.name,
@@ -367,6 +388,57 @@
       }
     });
     $("#u-list").addEventListener("click", onListClick);
+    const syncSel = () => {
+      $("#u-del-sel").disabled = !SEL.size;
+      $("#u-del-sel").textContent = SEL.size ? `حذف ${fa(SEL.size)} انتخاب‌شده` : "حذف انتخاب‌شده‌ها";
+    };
+    $("#u-list").addEventListener("change", (e) => {
+      const c = e.target.closest(".u-sel");
+      if (!c) return;
+      const id = Number(c.dataset.id);
+      c.checked ? SEL.add(id) : SEL.delete(id);
+      syncSel();
+    });
+    $("#u-all").addEventListener("change", (e) => {
+      document.querySelectorAll(".u-sel").forEach((c) => {
+        c.checked = e.target.checked;
+        const id = Number(c.dataset.id);
+        e.target.checked ? SEL.add(id) : SEL.delete(id);
+      });
+      syncSel();
+    });
+    $("#u-del-sel").addEventListener("click", async () => {
+      if (!SEL.size) return;
+      const ok = await ask({
+        title: `حذف ${fa(SEL.size)} کاربر`,
+        body: "کاربران انتخاب‌شده برای همیشه حذف می‌شوند. فقط کاربرانی که تا ۴۸ ساعت بعد از ساخت هیچ استفاده‌ای نکرده باشند پولشان برمی‌گردد.",
+        okText: "حذف",
+      });
+      if (!ok) return;
+      try {
+        const j = await api("/api/agent/peers/bulk_delete", { method: "POST", body: JSON.stringify({ ids: [...SEL] }) });
+        SEL.clear();
+        $("#u-all").checked = false;
+        syncSel();
+        toast(`${fa(j.deleted)} کاربر حذف شد` + (j.refund ? " · " + toman(j.refund) + " برگشت داده شد" : ""));
+        await Promise.all([loadMe(), loadPeers()]);
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
+    $("#u-del-exp").addEventListener("click", async () => {
+      try {
+        const pre = await api("/api/agent/peers/delete_expired", { method: "POST", body: JSON.stringify({ dry_run: true }) });
+        if (!pre.count) return toast("کاربر منقضی ندارید");
+        const ok = await ask({ title: "حذف منقضی‌ها", body: `${fa(pre.count)} کاربر منقضی برای همیشه حذف می‌شوند.`, okText: "حذف" });
+        if (!ok) return;
+        const j = await api("/api/agent/peers/delete_expired", { method: "POST", body: "{}" });
+        toast(`${fa(j.deleted)} کاربر منقضی حذف شد`);
+        await Promise.all([loadMe(), loadPeers()]);
+      } catch (e) {
+        toast(e.message, true);
+      }
+    });
     $("#c-result").addEventListener("click", onListClick);
     $("#u-q").addEventListener("input", () => {
       clearTimeout(qTimer);

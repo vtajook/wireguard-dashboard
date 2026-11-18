@@ -17,11 +17,26 @@ import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if not os.path.exists(os.path.join(ROOT, 'app.py')):
+    ROOT = os.environ.get('WG_PANEL_ROOT', '/opt/WG_Panel')
 INST = os.path.join(ROOT, 'instance')
 
 
+def _proc_env():
+    try:
+        pid = subprocess.run(['systemctl', 'show', '-p', 'MainPID', '--value', 'wg-panel'],
+                             capture_output=True, text=True).stdout.strip()
+        raw = open(f'/proc/{pid}/environ', 'rb').read().split(b'\0')
+        return dict(x.decode(errors='replace').split('=', 1) for x in raw if b'=' in x)
+    except Exception:
+        return {}
+
+
+PROC_ENV = _proc_env()
+
+
 def env_value(name):
-    v = os.environ.get(name)
+    v = os.environ.get(name) or PROC_ENV.get(name)
     if v:
         return v
     try:

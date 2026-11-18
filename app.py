@@ -34384,7 +34384,9 @@ def _rs_current():
         r = db.session.get(Reseller, int(rid))
     except Exception:
         return None
-    if not r or not r.enabled or int(r.session_ver or 1) != int(session.get('rs_ver') or 0):
+    if not r or int(r.session_ver or 1) != int(session.get('rs_ver') or 0):
+        return None
+    if not r.enabled and not (session.get('rs_admin_view') and getattr(current_user, 'is_authenticated', False)):
         return None
     return r
 
@@ -34571,6 +34573,7 @@ def agent_login():
         else:
             session['rs_id'] = r.id
             session['rs_ver'] = int(r.session_ver or 1)
+            session.pop('rs_admin_view', None)
             session.permanent = True
             r.last_login_at = datetime.utcnow()
             db.session.commit()
@@ -34586,6 +34589,9 @@ def agent_login():
 def agent_logout():
     session.pop('rs_id', None)
     session.pop('rs_ver', None)
+    admin_view = session.pop('rs_admin_view', None)
+    if admin_view and getattr(current_user, 'is_authenticated', False):
+        return redirect('/resellers')
     return redirect('/agent/login')
 
 
@@ -34609,6 +34615,7 @@ def agent_me():
     d['months'] = list(_RS_MONTHS)
     d['tests_used_24h'] = _rs_tests_last_24h(r)
     d['refund_hours'] = _RS_REFUND_HOURS
+    d['admin_view'] = bool(session.get('rs_admin_view') and getattr(current_user, 'is_authenticated', False))
     d.pop('note', None)
     return jsonify(ok=True, me=d)
 
@@ -35000,6 +35007,18 @@ def api_resellers_delete(rid):
     _RS_NAME_MEMO['ts'] = 0
     logpanel_action('reseller_delete', f'reseller={name}; users_kept={n}')
     return jsonify(ok=True, users_kept=n)
+
+
+@app.post('/api/resellers/<int:rid>/login_as')
+@_admin_only
+def api_resellers_login_as(rid):
+    """Open the agent panel as this reseller (admin stays logged in)."""
+    r = db.session.get(Reseller, rid) or abort(404)
+    session['rs_id'] = r.id
+    session['rs_ver'] = int(r.session_ver or 1)
+    session['rs_admin_view'] = True
+    logpanel_action('reseller_login_as', f'reseller={r.username}')
+    return jsonify(ok=True, url='/agent')
 
 
 @app.get('/api/resellers/<int:rid>/txns')

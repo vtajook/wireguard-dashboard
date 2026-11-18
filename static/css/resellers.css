@@ -1,4 +1,5 @@
-.rs-shell {
+.rs-shell,
+.rs-dialog {
   --rs-card: #ffffff;
   --rs-text: #18202d;
   --rs-muted: #687387;
@@ -11,6 +12,8 @@
   --rs-warn-bg: #fff4dc;
   --rs-bad: #c0352b;
   --rs-bad-bg: #fde9e7;
+}
+.rs-shell {
   display: grid;
   gap: 16px;
   padding: 4px 0 40px;
@@ -72,7 +75,9 @@ html[data-theme="dark"] .rs-dialog {
 .pos { color: var(--rs-ok); }
 .neg { color: var(--rs-bad); }
 
-.rs-dialog { border: 1px solid var(--rs-line); border-radius: 16px; background: var(--rs-card, #fff); color: var(--rs-text, #18202d); width: min(640px, calc(100vw - 32px)); padding: 20px; }
+.rs-dialog { border: 1px solid var(--rs-line); border-radius: 16px; background: var(--rs-card, #fff); color: var(--rs-text, #18202d); width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; padding: 20px; box-sizing: border-box; }
+.rs-dialog footer { position: sticky; bottom: -20px; background: var(--rs-card, #fff); padding: 12px 0 4px; }
+.rs-dialog .rs-btn.primary { background: var(--rs-accent, #2f6fed); border-color: var(--rs-accent, #2f6fed); color: #fff; }
 .rs-dialog::backdrop { background: rgba(10, 14, 20, .45); }
 .rs-dialog h2 { margin: 0 0 14px; font-size: 18px; }
 .rs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -86,7 +91,7 @@ html[data-theme="dark"] .rs-dialog {
 #rs-iface-list label { flex-direction: row; align-items: center; gap: 6px; color: inherit; }
 .rs-error { color: var(--rs-bad, #c0352b); font-size: 13px; margin: 10px 0 0; }
 .rs-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-@media (max-width: 560px) { .rs-grid { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .rs-grid { grid-template-columns: 1fr; } .rs-dialog { padding: 16px; } .rs-dialog footer .rs-btn { flex: 1; justify-content: center; } }
 
 @media (max-width: 760px) {
   .rs-top { flex-direction: column; }

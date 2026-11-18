@@ -68,6 +68,7 @@
 
   function renderMe() {
     $("#ag-user").textContent = ME.username;
+    $("#ag-adminview").hidden = !ME.admin_view;
     $("#ag-balance").textContent = toman(ME.balance);
     $("#st-price").textContent = toman(ME.price_per_month);
     $("#st-users").textContent = fa(ME.users) + (ME.max_users ? " / " + fa(ME.max_users) : "");

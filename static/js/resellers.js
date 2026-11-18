@@ -52,6 +52,7 @@
             <button class="rs-btn sm primary" data-act="charge" data-id="${r.id}"><i class="fas fa-wallet"></i> Charge</button>
             <button class="rs-btn sm" data-act="peers" data-id="${r.id}">Users</button>
             <button class="rs-btn sm" data-act="txns" data-id="${r.id}">Ledger</button>
+            <button class="rs-btn sm" data-act="loginas" data-id="${r.id}" title="Open this reseller's panel"><i class="fas fa-right-to-bracket"></i> Login as</button>
             <button class="rs-btn sm" data-act="edit" data-id="${r.id}">Edit</button>
             <button class="rs-btn sm" data-act="suspend" data-id="${r.id}" title="Disable / re-enable all users of this reseller">Users on/off</button>
             <button class="rs-btn sm danger" data-act="delete" data-id="${r.id}"><i class="fas fa-trash"></i></button>
@@ -129,6 +130,18 @@
     const act = b.dataset.act;
     try {
       if (act === "edit") return openForm(r);
+      if (act === "loginas") {
+        const win = window.open("about:blank", "_blank");
+        try {
+          const j = await api(`/api/resellers/${r.id}/login_as`, { method: "POST", body: "{}" });
+          if (win) win.location.href = j.url || "/agent";
+          else location.href = j.url || "/agent";
+        } catch (err) {
+          if (win) win.close();
+          throw err;
+        }
+        return;
+      }
       if (act === "peers" || act === "txns") {
         detail = { id: r.id, view: act, q: "" };
         $("#rs-detail-q").value = "";

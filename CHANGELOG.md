@@ -8,6 +8,10 @@ The built-in updater, installer and `wgpanel` CLI pull from this repository
 - Backup → Telegram: when the connection to Telegram failed, the error text
   (shown on the Backup page and stored in the backup status) contained the
   full request URL with the bot token. The token is masked now.
+- Telegram bot: the bot token is also masked in the bot's admin log details.
+- Telegram bot: the backup-restore file handler now checks admin access
+  itself (before, it relied only on the restore state set from the admin
+  menu, so a removed admin with an open restore could still upload).
 
 ## 2026-11-20 — Persian digits in number prompts (2.2.5)
 

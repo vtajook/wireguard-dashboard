@@ -414,6 +414,14 @@ def log_admin(uid: str, uname: str, action: str, details: str = ""):
 
 def _log_admin_update(update: "Update", action: str, details: str = ""):
 
+    # error texts from Telegram downloads can carry the URL with the token
+    try:
+        details = str(details or "")
+        if BOT_TOKEN:
+            details = details.replace(str(BOT_TOKEN), "<token>")
+        details = re.sub(r"bot\d+:[A-Za-z0-9_-]{20,}", "bot<token>", details)
+    except Exception:
+        pass
     try:
         u = getattr(update, "effective_user", None)
         uid = str(getattr(u, "id", "") or "")
@@ -7340,6 +7348,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_text(update, "◇ I didn't catch that. Use the buttons below.", KB.home())
 
+@admin_only
 async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE.get("BACKUP_RESTORE_WAIT"))
     if not st:

@@ -392,6 +392,36 @@ def _interface_schema():
 
 app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
+
+
+def _ensure_secret_key():
+    """Without FLASK_SECRET_KEY the config fell back to the public string
+    "change-me", so anyone could sign a session cookie. Use a random key
+    kept in instance/secret_key instead (same key across workers/restarts)."""
+    cur = str(app.config.get('SECRET_KEY') or '').strip()
+    if cur and cur != 'change-me':
+        return
+    path = os.path.join(app.instance_path, 'secret_key')
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            key = fh.read().strip()
+    except OSError:
+        key = ''
+    if len(key) < 32:
+        key = secrets.token_hex(32)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                fh.write(key)
+        except FileExistsError:
+            with open(path, 'r', encoding='utf-8') as fh:
+                key = fh.read().strip() or key
+        except OSError:
+            pass
+    app.config['SECRET_KEY'] = key
+
+
+_ensure_secret_key()
 db.init_app(app)
 
 _STATIC_VERSION_CACHE = {}
@@ -6962,7 +6992,8 @@ def _backup_restore_impl():
                 root_resolved = dest_root.resolve()
                 dest_resolved = dest.resolve() if dest.exists() else dest.parent.resolve() / dest.name
 
-                if not str(dest_resolved).startswith(str(root_resolved)):
+                # a plain prefix test let /etc/wireguard2/... pass for /etc/wireguard
+                if dest_resolved != root_resolved and root_resolved not in dest_resolved.parents:
                     raise ValueError(f'unsafe restore path: {member}')
 
                 _backup_existing(dest, kind_name=kind_name, rel_tail=tail)

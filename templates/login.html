@@ -346,7 +346,7 @@
 
         {% with msgs = get_flashed_messages(with_categories=true) %} {% if msgs
         %} {% for category, message in msgs %}
-        <div class="flash {{ category|lower }}">{{ message|safe }}</div>
+        <div class="flash {{ category|lower }}">{{ message }}</div>
         {% endfor %} {% endif %} {% endwith %}
 
         <form

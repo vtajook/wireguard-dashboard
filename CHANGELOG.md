@@ -3,6 +3,26 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — full source check (2.2.7)
+
+Whole source checked with static analysis (ruff for Python, eslint for the
+browser scripts, shell syntax) plus a manual review of security-relevant code.
+
+- Security: without `FLASK_SECRET_KEY` in the environment the panel used the
+  public default "change-me" to sign login cookies (anyone could forge an
+  admin session). A random key is now generated once and kept in
+  `instance/secret_key` (installs made with install.sh already set a key).
+- Security: login page messages are no longer rendered as raw HTML.
+- Security: Telegram admin usernames / notes are escaped on the Settings and
+  Telegram pages.
+- Backup restore: the "file stays inside the target folder" check used a
+  plain text prefix (/etc/wireguard2 passed for /etc/wireguard); it compares
+  real paths now.
+- `wgpanel` CLI (agent/node.py): "downgrade release" and its rollback crashed
+  because `tempfile` was not imported.
+- install.sh always installs the latest version from GitHub (main branch),
+  both on a fresh server and when run again on an existing install.
+
 ## 2026-11-20 — bot token never shown (2.2.6)
 
 - Backup → Telegram: when the connection to Telegram failed, the error text

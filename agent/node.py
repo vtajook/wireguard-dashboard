@@ -13,6 +13,7 @@ import signal
 import socket
 import ipaddress
 import tarfile
+import tempfile
 import zipfile
 import ssl
 import urllib.request

@@ -88,12 +88,13 @@ async function api(path, opts = {}) {
       return;
     }
     emptyRow.style.display = 'none';
+    const tgEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     admins.forEach(a => {
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${a.tg_id}</td>
-        <td>${a.username ? ('@' + a.username.replace(/^@/, '')) : ''}</td>
-        <td>${a.note || ''}</td>
+        <td>${tgEsc(a.tg_id)}</td>
+        <td>${a.username ? ('@' + tgEsc(a.username.replace(/^@/, ''))) : ''}</td>
+        <td>${tgEsc(a.note || '')}</td>
         <td>${a.created_at_display || panelDateTime(a.created_at)}</td>
         <td style="text-align:right">
           <button class="btn danger admin-del" data-id="${a.tg_id}">

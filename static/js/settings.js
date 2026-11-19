@@ -2429,15 +2429,16 @@ document.getElementById('rt-restart')
       try { const j = await jfetch('/api/telegram/status'); updateStatusChips(j); } catch {}
     }
 
+    const tgEsc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     function renderAdmins(list) {
       const tb = document.querySelector('#tg-admins-table tbody'); if (!tb) return;
       tb.innerHTML = '';
       (list || []).forEach(a => {
         const tr = document.createElement('tr');
         tr.innerHTML = `
-          <td>${a.id}</td>
-          <td>${a.username ? '@' + a.username : ''}</td>
-          <td>${a.note || ''}</td>
+          <td>${tgEsc(a.id)}</td>
+          <td>${a.username ? '@' + tgEsc(a.username) : ''}</td>
+          <td>${tgEsc(a.note || '')}</td>
           <td>
             <button class="pill ${a.muted ? 'gray' : 'green'} tg-mute-toggle" data-id="${a.id}" data-muted="${a.muted ? '1' : '0'}">${a.muted ? 'Muted' : 'Active'}</button>
           </td>

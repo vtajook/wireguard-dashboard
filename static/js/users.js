@@ -3519,9 +3519,19 @@
         window.__diagnosisEditorOpened=true;
         const cleanURL=new URL(location.href);['diagnosis_peer','interface','node','field','key'].forEach(k=>cleanURL.searchParams.delete(k));history.replaceState(history.state,'',cleanURL);
         const key=repairParams.get('key');
-        const target=peers.find(p=>scopeId ? !!key && p.public_key===key : String(p.id)===repairParams.get('diagnosis_peer'));
+        const wantId=repairParams.get('diagnosis_peer');
+        const target=peers.find(p=>scopeId ? !!key && p.public_key===key : String(p.id)===wantId);
         if(target){
           openPeerDiagnosisEditor(target,repairParams.get('field'));
+        }else if(paged && /^\d+$/.test(String(wantId||''))){
+          // paged list: the peer is usually on another page, load it by id
+          const one=new URL('/api/peers',window.location.origin);
+          one.searchParams.set('iface_id',String(ifaceId));one.searchParams.set('ids',String(wantId));
+          fetch(one.toString(),{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}})
+            .then(r=>r.ok?r.json():null).then(j=>{const t=(j&&j.peers||[])[0];
+              if(t){(window._peers=window._peers||[]).push(t);openPeerDiagnosisEditor(t,repairParams.get('field'));}
+              else window.toast?.('The requested peer is not in this interface. Select its node and interface, then run diagnosis again.','warning',{duration:8000});})
+            .catch(()=>{});
         }else window.toast?.('The requested peer is not in this interface. Select its node and interface, then run diagnosis again.','warning',{duration:8000});
       }
       renderPeerSummary(peers);

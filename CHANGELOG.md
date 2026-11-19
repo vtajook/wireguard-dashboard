@@ -3,6 +3,20 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-19 — bug fixes (2.2.1)
+
+- Agent refund: deleting an unused agent user could refund more than was
+  paid. SQLite reuses the id of a deleted last user, so payments of an older,
+  already deleted user with the same id were counted too. Only payments made
+  after the user was created count now.
+- Agent renewal: if a renewal failed, the money came back but the user's
+  usage had already been reset to zero. The usage is restored now.
+- Agent volume users: a tiny volume (e.g. 0.0001 GB) rounded the cost to 0
+  and made free accounts. Volume is in 0.1 GB steps, 0.1 GB minimum.
+- Peers page: opening a peer from Diagnosis (edit link) said "peer is not in
+  this interface" when the peer was on another page of the list; it is now
+  loaded by id and the editor opens.
+
 ## 2026-11-18 — users' traffic on the dashboard
 
 - New "Users' traffic" card on the dashboard: today, yesterday, last 7 days,

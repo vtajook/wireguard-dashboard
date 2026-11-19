@@ -34972,7 +34972,11 @@ def _rs_read_gb(r, data, required):
         gb = float(data.get('data_gb') or 0)
     except (TypeError, ValueError):
         raise ValueError('حجم نامعتبر است')
-    gb = max(0.0, min(10000.0, gb))
+    # whole 0.1 GB steps: a tiny value (0.0001 GB) rounded the cost to 0 and
+    # made free accounts
+    gb = round(max(0.0, min(10000.0, gb)), 1)
+    if 0 < float(data.get('data_gb') or 0) and gb < 0.1:
+        raise ValueError('کمترین حجم ۰٫۱ گیگ است')
     if r.price_per_gb and not r.price_per_month and required and gb <= 0:
         raise ValueError('حجم (گیگ) را وارد کنید')
     if not r.price_per_gb and not r.allow_data_limit:
@@ -35331,7 +35335,9 @@ def agent_renew_peer(pid):
         payload = {'time_limit_days': float(p.time_limit_days or 0) + add}
     payload['data_limit_value'] = new_gb if new_gb else 0
     payload['data_limit_unit'] = 'Gi'
-    # a renewal is a new period: traffic starts from zero
+    # a renewal is a new period: traffic starts from zero (restored below
+    # when the renewal fails, so a failed renewal never wipes the usage)
+    usage_before = (p.bytes_offset, p.used_bytes_total)
     if p.data_limit_value or new_gb:
         try:
             _wg_dump_invalidate()
@@ -35347,6 +35353,13 @@ def agent_renew_peer(pid):
         code, body = 500, {'detail': str(exc)}
     if code >= 400 or (isinstance(body, dict) and body.get('ok') is False and body.get('success') is not True):
         db.session.rollback()
+        try:
+            p = db.session.get(Peer, pid)
+            if p is not None and (p.bytes_offset, p.used_bytes_total) != usage_before:
+                p.bytes_offset, p.used_bytes_total = usage_before
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
         if cost > 0:
             _rs_give(r, cost)
         return jsonify(ok=False, error='renew_failed',
@@ -35423,9 +35436,15 @@ def _rs_refund_for(r, p):
     fresh = (now_ts() - (to_ts(p.created_at) or 0)) <= _RS_REFUND_HOURS * 3600
     if not (fresh and not used and not p.first_used_at):
         return 0
-    spent = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
-             .filter(ResellerTxn.reseller_id == r.id, ResellerTxn.peer_id == p.id,
-                     ResellerTxn.kind.in_(('create', 'renew', 'topup', 'refund'))).scalar()) or 0
+    # SQLite reuses the id of a deleted last row, so an old (already
+    # deleted, maybe used) user's payments can carry the same peer_id: only
+    # count transactions made after this user was created.
+    q = (db.session.query(func.coalesce(func.sum(ResellerTxn.amount), 0))
+         .filter(ResellerTxn.reseller_id == r.id, ResellerTxn.peer_id == p.id,
+                 ResellerTxn.kind.in_(('create', 'renew', 'topup', 'refund'))))
+    if p.created_at is not None:
+        q = q.filter(ResellerTxn.at >= p.created_at)
+    spent = q.scalar() or 0
     return max(0, -int(spent))
 
 
@@ -35508,7 +35527,7 @@ def agent_topup_peer(pid):
         return jsonify(ok=False, error='not_volume', detail='افزودن فقط برای کاربران حجمی است؛ برای نامحدود از تمدید استفاده کنید'), 400
     data = request.get_json(silent=True) or {}
     try:
-        add_gb = max(0.0, min(10000.0, float(data.get('data_gb') or 0)))
+        add_gb = round(max(0.0, min(10000.0, float(data.get('data_gb') or 0))), 1)
         months = int(data.get('months') or 0)
     except (TypeError, ValueError):
         return jsonify(ok=False, error='invalid'), 400

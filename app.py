@@ -8155,9 +8155,15 @@ def _send_zip_telegram(
         )
 
     except Exception as exc:
+        # requests puts the URL (with /bot<token>/) into connection errors;
+        # never show or store the bot token
+        msg = str(exc)
+        if token:
+            msg = msg.replace(str(token), "<token>")
+        msg = re.sub(r"bot\d+:[A-Za-z0-9_-]{20,}", "bot<token>", msg)
         return (
             False,
-            f"Telegram exception: {exc}",
+            f"Telegram exception: {type(exc).__name__}: {msg[:300]}",
         )
 
 @app.get('/api/backup/db')

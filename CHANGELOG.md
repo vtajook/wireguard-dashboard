@@ -3,6 +3,12 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — bot token never shown (2.2.6)
+
+- Backup → Telegram: when the connection to Telegram failed, the error text
+  (shown on the Backup page and stored in the backup status) contained the
+  full request URL with the bot token. The token is masked now.
+
 ## 2026-11-20 — Persian digits in number prompts (2.2.5)
 
 - "Delete expired" (days) and "Subnet prefix" accepted only English digits;

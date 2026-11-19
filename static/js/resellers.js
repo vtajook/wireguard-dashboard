@@ -41,7 +41,7 @@
       .map((r) => {
         const low = r.price_per_month > 0 && r.balance < r.price_per_month;
         return `<tr>
-          <td data-label="Reseller"><div class="rs-name">${esc(r.username)}</div><div class="rs-sub">${esc(ifaceNames(r.iface_ids))}${r.note ? " · " + esc(r.note) : ""}</div></td>
+          <td data-label="Reseller"><div class="rs-name" data-no-i18n>${esc(r.username)}</div><div class="rs-sub">${(r.iface_ids || []).length ? `<span data-no-i18n>${esc(ifaceNames(r.iface_ids))}</span>` : "no interface"}${r.note ? ` · <span data-no-i18n>${esc(r.note)}</span>` : ""}</div></td>
           <td data-label="Status">${r.enabled ? '<span class="rs-badge ok">Active</span>' : '<span class="rs-badge bad">Disabled</span>'}</td>
           <td class="r" data-label="Wallet">${num(r.balance)}${low ? ' <span class="rs-badge warn">low</span>' : ""}</td>
           <td class="r" data-label="Price / month">${num(r.price_per_month)}${r.price_per_gb ? `<div class="rs-sub">${num(r.price_per_gb)} / GB${r.extra_month_price ? ` · +${num(r.extra_month_price)} / extra month` : ""}</div>` : '<div class="rs-sub">unlimited GB</div>'}</td>
@@ -258,7 +258,7 @@
       box.innerHTML = j.peers.length
         ? `<div class="rs-table-wrap"><table class="rs-table"><thead><tr><th>User</th><th>Interface</th><th>Status</th><th class="r">Left</th><th class="r">Used</th><th>Created</th></tr></thead><tbody>${j.peers
             .map(
-              (p) => `<tr><td class="rs-name">${esc(p.name)}</td><td>${esc(p.iface)}</td><td>${badge(p)}${p.multi_device ? ' <span class="rs-badge warn">multi-device</span>' : ""}</td>
+              (p) => `<tr><td class="rs-name" data-no-i18n>${esc(p.name)}</td><td>${esc(p.iface)}</td><td>${badge(p)}${p.multi_device ? ' <span class="rs-badge warn">multi-device</span>' : ""}</td>
               <td class="r">${left(p)}</td><td class="r">${size(p.used_bytes)}${p.limit_bytes ? " / " + size(p.limit_bytes) : ""}</td><td><span class="rs-sub">${when(p.created_at)}</span></td></tr>`,
             )
             .join("")}</tbody></table></div><p class="rs-sub">${j.total} users${j.total > j.per ? ` (showing newest ${j.per})` : ""}. Manage any of them on the Peers page as usual.</p>`

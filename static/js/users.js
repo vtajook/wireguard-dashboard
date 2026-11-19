@@ -1894,7 +1894,7 @@
       <div class="peer-identity-block peer-row-identity">
         <span class="peer-avatar ${avatar.tone}" aria-hidden="true">${peerEsc(avatar.letter)}</span>
         <div class="peer-identity-copy">
-          <span class="peer-name" title="${peerEsc(p.name || "")}">${peerEsc(p.name || "")}</span>
+          <span class="peer-name" data-no-i18n title="${peerEsc(p.name || "")}">${peerEsc(p.name || "")}</span>
           <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${peerEsc(p.iface || "—")}</span>
         </div>
         <div class="peer-row-status">${peerTagsHTML(p)}</div>

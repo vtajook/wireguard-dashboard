@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>پنل نمایندگی</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/agent.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/agent.css') }}?v=20261120">
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
 </head>
 <body>
@@ -118,8 +118,8 @@ GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>
       <h3 id="d-title"></h3>
       <p id="d-body"></p>
       <select id="d-select" hidden></select>
-      <label id="d-num-wrap" class="ag-dlg-num" hidden><span id="d-num-label"></span><input id="d-num" type="number" min="0" step="1" dir="ltr"></label>
-      <footer><button value="cancel" class="ag-btn ghost">انصراف</button><button value="ok" class="ag-btn primary" id="d-ok">تأیید</button></footer>
+      <label id="d-num-wrap" class="ag-dlg-num" hidden><span id="d-num-label"></span><input id="d-num" type="number" min="0" step="any" dir="ltr"></label>
+      <footer><button type="button" value="cancel" class="ag-btn ghost" id="d-cancel">انصراف</button><button value="ok" class="ag-btn primary" id="d-ok">تأیید</button></footer>
     </form>
   </dialog>
   <dialog id="ag-view" class="ag-dialog ag-view">
@@ -130,6 +130,6 @@ GET    /api/agent/peer/ID/config              → WireGuard .conf text</pre>
     </form>
   </dialog>
   <div id="ag-toast" class="ag-toast" role="status" aria-live="polite"></div>
-  <script src="{{ url_for('static', filename='js/agent.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/agent.js') }}?v=20261120"></script>
 </body>
 </html>

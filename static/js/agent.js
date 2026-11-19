@@ -64,6 +64,11 @@
         },
         { once: true },
       );
+      // the dialog is reused: clear the answer of the previous one, or
+      // closing with Back/Escape would count as the earlier "ok"
+      d.returnValue = "";
+      // Cancel is type=button so Enter in the number box presses OK, not Cancel
+      $("#d-cancel").onclick = () => d.close("cancel");
       d.showModal();
     });
   }
@@ -413,6 +418,10 @@
       if (!b) return;
       status = b.dataset.st;
       page = 1;
+      // a new list: drop selections the user can no longer see
+      SEL.clear();
+      $("#u-all").checked = false;
+      syncSel();
       document.querySelectorAll("#u-filters [data-st]").forEach((x) => x.classList.toggle("active", x === b));
       loadPeers().catch((err) => toast(err.message, true));
     });
@@ -472,6 +481,9 @@
       clearTimeout(qTimer);
       qTimer = setTimeout(() => {
         page = 1;
+        SEL.clear();
+        $("#u-all").checked = false;
+        syncSel();
         loadPeers().catch((e) => toast(e.message, true));
       }, 300);
     });

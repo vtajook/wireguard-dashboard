@@ -1,3 +1,7 @@
+/* the hidden attribute must win over classes that set display (an empty
+   number box showed in the delete dialog) */
+.rs-shell [hidden], .rs-dialog [hidden] { display: none !important; }
+
 .rs-shell,
 .rs-dialog {
   --rs-card: #ffffff;

@@ -3,6 +3,19 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — agent panel fixes (2.2.2)
+
+- Agent dialogs: an empty number box showed in confirm dialogs (delete,
+  rotate…). Elements with the `hidden` attribute were shown when their class
+  set `display`; this also showed empty result boxes. Fixed in the agent and
+  resellers pages.
+- Agent dialogs: closing a dialog with Back (phone) or Escape could run the
+  action, because the reused dialog kept the "ok" answer of the previous one.
+- Agent dialogs: Enter in the GB box pressed Cancel; it presses OK now.
+  Decimal GB (e.g. 2.5) is accepted in renew / add dialogs.
+- Agent list: changing the status filter or search clears the selection, so
+  "delete selected" never deletes users that are no longer on screen.
+
 ## 2026-11-19 — bug fixes (2.2.1)
 
 - Agent refund: deleting an unused agent user could refund more than was

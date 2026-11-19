@@ -1,3 +1,7 @@
+/* the hidden attribute must win over classes that set display (an empty
+   number box showed in the delete dialog) */
+[hidden] { display: none !important; }
+
 :root {
   --ag-bg: #f4f6f9;
   --ag-card: #ffffff;

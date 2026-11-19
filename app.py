@@ -35101,6 +35101,13 @@ def agent_peers():
     dump = _wg_dump_all() or {}
     counts = {'all': 0, 'online': 0, 'active': 0, 'disabled': 0, 'blocked': 0, 'expired': 0, 'unused': 0}
     match_ids = []
+    # interface device names once (p.iface was one extra query per user)
+    devs = {}
+    for _i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(r.iface_ids() or [-1])).all():
+        try:
+            devs[_i.id] = iface_devname(_i)
+        except Exception:
+            pass
     for p in q.order_by(Peer.id.desc()).all():
         try:
             exp = _effective_expiry_ts(p)
@@ -35109,7 +35116,10 @@ def agent_peers():
         expired = exp is not None and exp <= now
         hs = 0
         try:
-            ent = (dump.get(iface_devname(p.iface)) or {}).get(p.public_key)
+            dev = devs.get(p.iface_id)
+            if dev is None:
+                dev = devs[p.iface_id] = iface_devname(p.iface)
+            ent = (dump.get(dev) or {}).get(p.public_key)
             hs = int(ent[0] or 0) if ent else 0
         except Exception:
             pass
@@ -35195,9 +35205,34 @@ def _rs_txn_public(t):
             'actor': t.actor or '', 'note': t.note or ''}
 
 
+@contextmanager
+def _rs_create_lock(r):
+    """One create at a time per reseller (across gunicorn workers), so
+    parallel bot requests cannot pass the test quota / max users checks
+    together."""
+    import fcntl
+    os.makedirs(_ALLOC_LOCK_DIR, exist_ok=True)
+    fh = open(os.path.join(_ALLOC_LOCK_DIR, f'reseller_{int(r.id)}.lock'), 'w')
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        finally:
+            fh.close()
+
+
 @app.post('/api/agent/peers')
 @reseller_required
 def agent_create_peer():
+    with _rs_create_lock(g.reseller):
+        # counts read before the lock may be stale
+        db.session.expire_all()
+        return _agent_create_peer_locked()
+
+
+def _agent_create_peer_locked():
     r = g.reseller
     data = request.get_json(silent=True) or {}
     name = (data.get('name') or '').strip()

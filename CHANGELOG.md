@@ -3,6 +3,15 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — agent API fixes (2.2.4)
+
+- Agent create: parallel requests (e.g. a bot sending many at once) could
+  all pass the daily test quota and the max-users limit together. Creates of
+  one agent now run one at a time (file lock, works across workers).
+- Agent users list: one database query per user was made to find its
+  interface; interfaces are read once now (faster for agents with many
+  users).
+
 ## 2026-11-20 — resellers page fixes (2.2.3)
 
 - Security: a new reseller could be opened with the login cookie of a

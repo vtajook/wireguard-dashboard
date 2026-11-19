@@ -3059,7 +3059,8 @@
   let PAGED = null;            // {total, pages, ids, counts} of the last answer
   let pagedReloadTimer = null;
   function isPagedMode() {
-    return !getScopeId() && !!SELECTED_IFACE_ID;
+    // local interface, or any node scope (all its interfaces or one)
+    return getScopeId() ? true : !!SELECTED_IFACE_ID;
   }
   function schedulePagedReload(delay = 120) {
     clearTimeout(pagedReloadTimer);
@@ -3460,21 +3461,25 @@
     }, timeoutMs);
 
     try {
-      const paged = !scopeId && !!ifaceId;
-      const base = scopeId
-        ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
-        : paged
-          ? "/api/peers/page"
+      const paged = scopeId ? true : !!ifaceId;
+      const base = paged
+        ? "/api/peers/page"
+        : scopeId
+          ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
           : "/api/peers";
 
       const url = new URL(base, window.location.origin);
 
-      if (scopeId) {
-        if (typeof SELECTED_IFACE_NAME === "string" && SELECTED_IFACE_NAME) {
-          url.searchParams.set("iface", SELECTED_IFACE_NAME);
+      {
+        if (scopeId) {
+          // node scope: the server pages the node's list too
+          url.searchParams.set("node", String(scopeId));
+          if (typeof SELECTED_IFACE_NAME === "string" && SELECTED_IFACE_NAME) {
+            url.searchParams.set("iface", SELECTED_IFACE_NAME);
+          }
+        } else if (ifaceId) {
+          url.searchParams.set("iface_id", String(ifaceId));
         }
-      } else {
-        if (ifaceId) url.searchParams.set("iface_id", String(ifaceId));
         if (paged) {
           url.searchParams.set("page", String(pagination.page || 1));
           url.searchParams.set("per", String(pagination.pageSize || 8));
@@ -6607,11 +6612,13 @@
     if (action === "qr") return openQR(id);
 
     if (action === "rotate") {
-      if (scopeId) {
-        toastSafe("Changing the link is only available for local peers.", "warning");
+      const pp = findPeer(id);
+      // node peers are addressed by public key on the page; the API needs the panel id
+      const rotateId = scopeId ? pp?.id : id;
+      if (!rotateId) {
+        toastSafe("Peer not found. Refresh the page and try again.", "warning");
         return;
       }
-      const pp = findPeer(id);
       const ok = await (window.wgConfirm
         ? window.wgConfirm({
             title: "Change user link",
@@ -6622,7 +6629,7 @@
       if (!ok) return;
       btn.disabled = true;
       try {
-        const r = await fetch(`/api/peer/${encodeURIComponent(id)}/rotate`, {
+        const r = await fetch(`/api/peer/${encodeURIComponent(rotateId)}/rotate`, {
           method: "POST",
           credentials: "same-origin",
           headers: { Accept: "application/json" },

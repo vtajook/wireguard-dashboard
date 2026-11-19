@@ -51,7 +51,7 @@ from panel_core.health_center import build_health_center
 from panel_operations.peer_diagnostics import diagnose_peer
 from sqlalchemy import or_, and_, text, inspect, func, event
 from flask_wtf.csrf import CSRFProtect, generate_csrf
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, quote
 import secrets
 import pyotp
 import bcrypt
@@ -10756,7 +10756,14 @@ def _wg_dump_all(max_age=None):
 
 def _wg_runtime_entry(peer):
     iface = getattr(peer, 'iface', None)
-    if iface is None or getattr(iface, 'node_id', None) is not None:
+    if iface is not None and getattr(iface, 'node_id', None) is not None:
+        # node peer: (handshake, rx, tx) from the node runtime snapshot
+        try:
+            e = _node_rt_entry(peer, max_age=30, allow_heavy=False)
+        except Exception:
+            e = None
+        return (e[1], e[2], e[3]) if e else None
+    if iface is None:
         return None
     name = getattr(iface, 'name', '') or ''
     if ':' in name:
@@ -15327,7 +15334,31 @@ def _reenable_blocked_peer(peer, note='Renewed: limits allow access again') -> b
     if (getattr(peer, 'status', '') or '') != 'blocked':
         return False
     iface = getattr(peer, 'iface', None)
-    if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+    if iface is not None and getattr(iface, 'node_id', None) is not None:
+        # node peer (renewed or penalty over): enable it on the node, keep usage
+        try:
+            n = db.session.get(Node, iface.node_id)
+            if n is None:
+                return False
+            payload = {}
+            try:
+                payload['host_cidr'] = _host_peer(peer)
+            except Exception:
+                pass
+            node_post(n, f'/api/peer/{peer.public_key}/enable', payload, timeout=15)
+        except Exception:
+            _enforce_warn(peer, 'unblock')
+            return False
+        peer.status = 'online'
+        try:
+            e = _node_rt_entry(peer, max_age=0, allow_heavy=False)
+            if e:
+                peer.bytes_offset = max(0, int(e[2] or 0) + int(e[3] or 0))
+        except Exception:
+            pass
+        log_event(peer, 'unblocked', note, commit=False)
+        return True
+    if iface is None or ':' in (iface.name or ''):
         return False
     try:
         if _iface_up(iface_devname(iface)):
@@ -15373,6 +15404,16 @@ def _expire():
     _wg_dump_invalidate()
     now = now_ts()
     changed = False
+
+    # Node peers: one runtime snapshot per node per cycle, so their usage,
+    # first use and data limits are enforced here too (before, only while
+    # someone had the node's peer list open).
+    node_rt = {}
+    try:
+        for n in Node.query.filter(Node.enabled.is_(True)).all():
+            node_rt[n.id] = _node_runtime(n, max_age=max(5, _EXPIRY_INTERVAL_SEC - 2))
+    except Exception:
+        current_app.logger.debug('node runtime refresh failed', exc_info=True)
 
     # Queue Telegram messages commit succeeds
     pending_notifications = []
@@ -15556,6 +15597,20 @@ def _expire():
                 )
                 or 0
             )
+            rt = node_rt.get(getattr(interface, 'node_id', None))
+            entry = rt['peers'].get(peer.public_key) if rt else None
+            if entry:
+                (
+                    used_effective,
+                    _delta,
+                    usage_changed,
+                ) = _accumulate_peer_usage(
+                    peer,
+                    int(entry[2] or 0) + int(entry[3] or 0),
+                    persist=True,
+                )
+                if usage_changed:
+                    changed = True
 
         if linked_subscription is not None:
             continue
@@ -16007,6 +16062,18 @@ def _su_tick(settings=None, now=None):
     eps = _su_read_endpoints()
     if eps is None:
         return []
+    # node peers too (cheap /api/runtime of current node agents only)
+    try:
+        with app.app_context():
+            for n in Node.query.filter(Node.enabled.is_(True)).all():
+                rt = _node_runtime(n, max_age=max(2, int(s.get('sample_sec') or 5) - 1), allow_heavy=False)
+                if not rt or not rt.get('light'):
+                    continue
+                for pub, e in rt['peers'].items():
+                    if e[4]:
+                        eps[pub] = (f'n{n.id}:{e[0]}', e[4])
+    except Exception:
+        app.logger.debug('single-user: node endpoints failed', exc_info=True)
     now = time.time() if now is None else float(now)
     window = s['window_sec']
     suspects = []
@@ -16044,7 +16111,7 @@ def _su_act(suspects, s, now):
                 if peer is None or (peer.status or '') != 'online':
                     continue
                 iface = getattr(peer, 'iface', None)
-                if iface is None or getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+                if iface is None:
                     continue
                 if str(peer.id) in exempt or (peer.name or '') in exempt:
                     continue
@@ -16065,8 +16132,13 @@ def _su_act(suspects, s, now):
                     pen = s['penalties_min']
                     mins = pen[min(strikes - 1, len(pen) - 1)]
                     try:   # save traffic up to this moment before removing it
-                        _wg_dump_invalidate()
-                        _accumulate_peer_usage(peer, _wg_transfer(peer), persist=True)
+                        if getattr(iface, 'node_id', None) is not None:
+                            e = _node_rt_entry(peer, max_age=0, allow_heavy=False)
+                            if e:
+                                _accumulate_peer_usage(peer, int(e[2] or 0) + int(e[3] or 0), persist=True)
+                        else:
+                            _wg_dump_invalidate()
+                            _accumulate_peer_usage(peer, _wg_transfer(peer), persist=True)
                     except Exception:
                         pass
                     peer.shared_block_until = int(now + mins * 60)
@@ -16971,6 +17043,87 @@ def bootstrap():
 # ------------
 # Node proxy
 # ____________
+_NODE_RT_CACHE = {}
+_NODE_RT_LOCK = threading.Lock()
+
+
+def _node_runtime(n, max_age=15, allow_heavy=True):
+    """Runtime snapshot of one node, cached per process:
+    {'peers': {pub: (iface, handshake, rx_bytes, tx_bytes, endpoint)},
+     'ifaces': {iface: (rx_bytes, tx_bytes)}, 'ts': fetched_at, 'light': bool}
+    Uses the cheap /api/runtime of current node agents. Older agents (404)
+    fall back to /api/peers, which pings every peer: only callers that pass
+    allow_heavy (the background enforcer) fetch it, at most once a minute;
+    others get the last snapshot (up to 3 min old) or None."""
+    if n is None or not getattr(n, 'enabled', True):
+        return None
+    now = time.time()
+    with _NODE_RT_LOCK:
+        st = dict(_NODE_RT_CACHE.get(n.id) or {})
+    data = st.get('data')
+    if data is not None:
+        limit = max_age if data.get('light') else max(60, max_age)
+        if now - data['ts'] < limit:
+            return data
+    if st.get('down_until', 0) > now:          # unreachable a moment ago
+        return data if (data is not None and now - data['ts'] < 180) else None
+    out, down = None, False
+    if st.get('no_light_until', 0) <= now:
+        try:
+            j = node_get(n, '/api/runtime', timeout=10)
+            if isinstance(j, dict) and j.get('ok'):
+                out = {
+                    'peers': {k: tuple(v) for k, v in (j.get('peers') or {}).items()
+                              if isinstance(v, list) and len(v) >= 5},
+                    'ifaces': {k: tuple(v) for k, v in (j.get('ifaces') or {}).items()
+                               if isinstance(v, list) and len(v) >= 2},
+                    'ts': now, 'light': True,
+                }
+        except requests.HTTPError as exc:
+            if getattr(getattr(exc, 'response', None), 'status_code', 0) == 404:
+                st['no_light_until'] = now + 600       # old node agent
+            else:
+                down = True
+        except Exception:
+            down = True
+    if out is None and not down and allow_heavy:
+        try:
+            j = node_get(n, '/api/peers', timeout=30) or {}
+            peers = {}
+            for r in (j.get('peers') or []) if isinstance(j, dict) else []:
+                pub = r.get('public_key')
+                if not pub:
+                    continue
+                rx = int(float(r.get('rx_mib') or 0) * 1048576)
+                tx = int(float(r.get('tx_mib') or 0) * 1048576)
+                peers[pub] = (r.get('iface') or '', int(r.get('latest_handshake') or 0), rx, tx, r.get('endpoint') or '')
+            out = {'peers': peers, 'ifaces': {}, 'ts': now, 'light': False}
+        except Exception:
+            down = True
+    if out is not None:
+        st['data'] = out
+        st.pop('down_until', None)
+    elif down:
+        st['down_until'] = now + 30
+    with _NODE_RT_LOCK:
+        _NODE_RT_CACHE[n.id] = st
+    if out is not None:
+        return out
+    return data if (data is not None and now - data['ts'] < 180) else None
+
+
+def _node_rt_entry(peer, max_age=15, allow_heavy=True):
+    """(iface, handshake, rx, tx, endpoint) of a node peer, or None."""
+    iface = getattr(peer, 'iface', None)
+    nid = getattr(iface, 'node_id', None)
+    if nid is None:
+        return None
+    rt = _node_runtime(db.session.get(Node, nid), max_age=max_age, allow_heavy=allow_heavy)
+    if not rt:
+        return None
+    return rt['peers'].get(peer.public_key)
+
+
 def node_get(n: Node, path: str, timeout=6):
     return _node_client.get(n.base_url, path, _read_api_key(n), timeout=timeout)
 
@@ -17064,6 +17217,10 @@ def node_summary(nid):
     })
 
 def _latest_handshake(peer):
+    if _peer_is_on_node(peer):
+        # node peers: from the node runtime snapshot (filled by the enforcer)
+        e = _node_rt_entry(peer, max_age=60, allow_heavy=False)
+        return int(e[1] or 0) if e else 0
     entry = _wg_runtime_entry(peer)
     return int(entry[0]) if entry else 0
 
@@ -19304,7 +19461,9 @@ def node_peers(nid):
                     tx_mib = 0.0
 
                 live_total = int((rx_mib + tx_mib) * 1024 * 1024)
-                used_total, _delta, usage_changed = _accumulate_peer_usage(p, live_total, persist=True)  # remote node rows
+                # read-only: the background enforcer saves node usage now; two
+                # writers with snapshots of different age inflated usage
+                used_total, _delta, usage_changed = _accumulate_peer_usage(p, live_total, persist=False)
                 if usage_changed:
                     dirty = True
                 used_live = used_total
@@ -19314,34 +19473,9 @@ def node_peers(nid):
                 live_total = int(getattr(p, 'bytes_offset', 0) or 0)
                 used_live = int(getattr(p, 'used_bytes_total', 0) or 0)
 
-            if not getattr(p, 'first_used_at', None):
-
-                try:
-                    handshake_ts = int((r or {}).get('latest_handshake')or 0)
-                except Exception:
-                    handshake_ts = 0
-
-                if handshake_ts > 0:
-                    p.first_used_at = from_ts(
-                        handshake_ts
-                    )
-                    p.timer_started_at = from_ts(handshake_ts)
-
-                    if (
-                        getattr(p,'start_on_first_use',False,)
-                        and getattr(p,'time_limit_days',None,)
-                        and not getattr(p,'unlimited',False,)):
-                        p.expires_at = from_ts(
-                            add_days_ts(
-                                handshake_ts,
-                                float(
-                                    p.time_limit_days
-                                ),
-                            )
-                        )
-
-                    dirty = True
-
+            # First use of node peers is recorded by the background enforcer
+            # (same rules as local peers: an old handshake after a timer reset
+            # is not a first use). Doing it here too took old handshakes.
 
             exp_ts      = _effective_expiry_ts(p)
             ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
@@ -19403,6 +19537,11 @@ def node_peers(nid):
                 'phone_number': getattr(p, 'phone_number', '') or '',
                 'telegram_id': getattr(p, 'telegram_id', '') or '',
                 'public_key': p.public_key,
+                # single-user state (now enforced on nodes too) for filters / tags
+                'shared_block_until': (int(getattr(p, 'shared_block_until', 0) or 0) if _su_penalty_active(p) else None),
+                'shared_last_at': int(getattr(p, 'shared_last_at', 0) or 0) or None,
+                'shared_strikes': int(getattr(p, 'shared_strikes', 0) or 0),
+                'reseller_id': getattr(p, 'reseller_id', None),
             })
 
         if dirty:
@@ -19477,6 +19616,9 @@ def node_peers(nid):
     compensation.register_node(n, pub)
     created_ts = now_ts()
     try:
+        # 2.5 GB used to fail / truncate here (int("2.5")); stored as MiB
+        _dl_val, _dl_unit = _normalize_data_limit(data.get('data_limit_value') or 0,
+                                                  data.get('data_limit_unit') or 'Mi')
         peer = Peer(
             iface_id=iface.id,
             name=(data.get('name') or '').strip() or 'peer',
@@ -19492,8 +19634,8 @@ def node_peers(nid):
             mtu=data.get('mtu') or None,
             dns=(data.get('dns') or '').strip() or None,
             status='online',
-            data_limit_value=int(data.get('data_limit_value') or 0),
-            data_limit_unit=data.get('data_limit_unit') or 'Mi',
+            data_limit_value=_dl_val,
+            data_limit_unit=_dl_unit,
             start_on_first_use=_sub_bool(data.get('start_on_first_use')),
             time_limit_days=_conv_time_limit(data),
             unlimited=_sub_bool(data.get('unlimited')),
@@ -19703,6 +19845,29 @@ def node_enable_peer(nid, pub):
             _node_peer_live_total_bytes(n, p) or 0
         )
         current_live_total = max(0, current_live_total)
+
+        # Same as local peers: the panel sends {"reset": false} = re-enable
+        # only (keep usage, first use and expiry). The old behaviour (also
+        # wipe usage and restart the timer) stays the default for bots.
+        _body = request.get_json(silent=True) or {}
+        _reset_arg = _body.get('reset', request.args.get('reset', True)) if isinstance(_body, dict) else True
+        if str(_reset_arg).strip().lower() in ('0', 'false', 'no', 'off'):
+            if getattr(p, 'shared_block_until', None):
+                p.shared_block_until = None
+            # save traffic not stored yet, then count from the live counter
+            try:
+                _accumulate_peer_usage(p, live_total=current_live_total, persist=True)
+            except Exception:
+                pass
+            p.bytes_offset = current_live_total
+            p.status = 'online'
+            db.session.commit()
+            try:
+                log_event(p, 'enabled', f'Node peer enabled (no reset); offset={current_live_total}')
+                logpanel_action('node_peer_enable', f'node={nid}; pid={p.id}; reset=0')
+            except Exception:
+                pass
+            return jsonify(success=True, ok=True, status='online', timer_reset=False, data_reset=False)
 
         p.bytes_offset = current_live_total
         p.used_bytes_total = 0
@@ -22557,6 +22722,33 @@ def _peers_full_list_for_iface(iface_id):
     return rows
 
 
+def _peers_full_list_for_node(nid, iface_name=''):
+    """Rows of the node peer list (/api/nodes/<nid>/peers), reused for 8 s
+    unless a write changed something. The node list itself is slow (the node
+    pings its peers), so paging must not ask for it on every page click."""
+    key = ('node', int(nid), str(iface_name or ''))
+    hit = _PEERS_PAGE_PARSED.get(key)
+    try:
+        gen = _peers_cache_gen()
+    except Exception:
+        gen = None
+    if hit and time.monotonic() - hit[1] < 8 and hit[2] == gen:
+        return hit[0]
+    fn = getattr(node_peers, '__wrapped__', node_peers)
+    path = f'/api/nodes/{int(nid)}/peers' + (f'?iface={quote(str(iface_name), safe="")}' if iface_name else '')
+    with app.test_request_context(path, method='GET'):
+        try:
+            resp = app.make_response(fn(nid=int(nid)))
+        except HTTPException as exc:
+            return None if exc.code != 404 else []
+        body = resp.get_json(silent=True) or {}
+    if resp.status_code != 200:
+        return None
+    rows = body.get('peers') or []
+    _PEERS_PAGE_PARSED[key] = (rows, time.monotonic(), gen)
+    return rows
+
+
 def _pp_num(v, default=None):
     try:
         if v is None or v == '':
@@ -22605,10 +22797,14 @@ def panel_peers_page():
     """Server-side search / filter / sort / pagination for the peers page.
     ?iface_id=&page=&per=&q=&status=&sort=  ->  one page of peers, counts for
     the summary, and the ids of every matching peer (for "select all")."""
+    node_id = request.args.get('node', type=int)
     iface_id = request.args.get('iface_id', type=int)
-    if not iface_id:
+    if node_id:
+        rows = _peers_full_list_for_node(node_id, (request.args.get('iface') or '').strip())
+    elif not iface_id:
         return jsonify(ok=False, error='iface_id_required'), 400
-    rows = _peers_full_list_for_iface(iface_id)
+    else:
+        rows = _peers_full_list_for_iface(iface_id)
     if rows is None:
         return jsonify(ok=False, error='peer_query_failed', peers=[]), 200
     now = time.time()
@@ -22661,7 +22857,9 @@ def panel_peers_page():
     page = min(page, pages)
     chunk = matched[(page - 1) * per: page * per]
     body = json.dumps({'ok': True, 'page': page, 'per': per, 'pages': pages, 'total': total,
-                       'counts': counts, 'ids': [t[1].get('id') for t in matched],
+                       # node pages address peers by public key (like their cards)
+                       'counts': counts,
+                       'ids': [(t[1].get('public_key') if node_id else t[1].get('id')) for t in matched],
                        'peers': [t[1] for t in chunk]}, separators=(',', ':')).encode()
     return _json_bytes_response(body)
 
@@ -26097,6 +26295,54 @@ def _rotate_local_peer(peer):
     return old_pub
 
 
+def _rotate_node_peer(peer):
+    """New keys for a node peer: same address, usage and limits; the old
+    config stops working. Returns the old public key."""
+    iface = peer.iface
+    n = db.session.get(Node, iface.node_id)
+    if n is None:
+        raise RuntimeError('The node of this peer is unknown.')
+    remote = iface.name.split(':', 1)[1] if ':' in (iface.name or '') else iface.name
+    host_cidr = _host_peer(peer)
+    active = (peer.status or '') not in ('offline', 'blocked')
+    # bank the traffic used so far under the old key
+    try:
+        e = _node_rt_entry(peer, max_age=0, allow_heavy=True)
+        if e:
+            _accumulate_peer_usage(peer, int(e[2] or 0) + int(e[3] or 0), persist=True)
+    except Exception:
+        pass
+    old_pub, old_priv = peer.public_key, peer.private_key
+    priv, pub = _new_wg_keypair()
+
+    def add(key):
+        node_post(n, '/api/peers/add', {
+            'iface': remote, 'public_key': key, 'host_cidr': host_cidr,
+            'endpoint': (getattr(peer, 'peer_endpoint', None) or '').strip(),
+            'persistent_keepalive': peer.persistent_keepalive or 0,
+            'mtu': peer.mtu, 'dns': peer.dns,
+            'allowed_ips': peer.allowed_ips or '0.0.0.0/0, ::/0',
+        }, timeout=20)
+        if not active:
+            node_post(n, f'/api/peer/{key}/disable', {'host_cidr': host_cidr}, timeout=15)
+
+    node_delete(n, f'/api/peer/{old_pub}', timeout=20)
+    try:
+        add(pub)
+    except Exception:
+        try:
+            add(old_pub)          # put the old key back
+        except Exception:
+            current_app.logger.exception('Could not restore old key for node peer %s', peer.id)
+        raise
+    peer.public_key = pub
+    peer.private_key = priv
+    peer.bytes_offset = 0
+    with _NODE_RT_LOCK:
+        _NODE_RT_CACHE.pop(n.id, None)
+    return old_pub
+
+
 def _new_short_token(model):
     for _ in range(20):
         t = secrets.token_urlsafe(16)
@@ -26110,10 +26356,8 @@ def _new_short_token(model):
 @require_api_key_or_login
 def api_peer_rotate(pid):
     peer = db.session.get(Peer, pid) or abort(404)
-    if _peer_is_on_node(peer):
-        return jsonify(ok=False, error='node_peer', detail='Rotation is only supported for local peers.'), 400
     try:
-        old_pub = _rotate_local_peer(peer)
+        old_pub = _rotate_node_peer(peer) if _peer_is_on_node(peer) else _rotate_local_peer(peer)
         _delete_shortlinks_for_peer_ids([peer.id])
         link = ShortLink(token=_new_short_token(ShortLink), peer_id=peer.id)
         db.session.add(link)
@@ -32885,6 +33129,16 @@ def _ts_save(d):
 
 def _ts_tick():
     devs = _ts_wg_devices()
+    # interfaces of the nodes (needs a node agent with /api/runtime); a node
+    # that is unreachable for a while is counted when it answers again
+    try:
+        for n in Node.query.filter(Node.enabled.is_(True)).all():
+            rt = _node_runtime(n, max_age=50, allow_heavy=False)
+            if rt and rt.get('light'):
+                for name, v in rt['ifaces'].items():
+                    devs[f'n{n.id}:{name}'] = [int(v[0] or 0), int(v[1] or 0)]
+    except Exception:
+        pass
     if not devs:
         return
     try:
@@ -34924,7 +35178,10 @@ def _rs_peer_rows(peers):
         iface = getattr(p, 'iface', None)
         hs, live = 0, None
         try:
-            ent = (dump.get(iface_devname(iface)) or {}).get(p.public_key) if iface is not None else None
+            if iface is not None and getattr(iface, 'node_id', None) is not None:
+                ent = _wg_runtime_entry(p)          # node runtime snapshot
+            else:
+                ent = (dump.get(iface_devname(iface)) or {}).get(p.public_key) if iface is not None else None
             if ent:
                 hs, live = int(ent[0] or 0), int(ent[1] or 0) + int(ent[2] or 0)
         except Exception:
@@ -35027,7 +35284,10 @@ def _rs_client_endpoint(iface):
     interface already use (what the admin / bot sets, e.g. a domain), so an
     agent's users never get the bare server IP."""
     try:
-        if iface_endpoint_override(iface) or _client_domain():
+        if iface_endpoint_override(iface):
+            return ''
+        # the global config domain is for the main server only, not nodes
+        if getattr(iface, 'node_id', None) is None and _client_domain():
             return ''
     except Exception:
         pass
@@ -35102,6 +35362,45 @@ def agent_page():
     return render_template('agent.html')
 
 
+def _rs_iface_remote(i):
+    """Interface name on its server (node mirrors are stored as nID:wg0)."""
+    name = getattr(i, 'name', '') or ''
+    return name.split(':', 1)[1] if (getattr(i, 'node_id', None) is not None and ':' in name) else name
+
+
+def _rs_iface_label(i):
+    if getattr(i, 'node_id', None) is None:
+        return i.name
+    n = db.session.get(Node, i.node_id)
+    return f"{getattr(n, 'name', None) or ('node ' + str(i.node_id))} / {_rs_iface_remote(i)}"
+
+
+def _rs_iface_usable(i):
+    """Local interfaces, and interfaces of enabled nodes."""
+    if i is None:
+        return False
+    if getattr(i, 'node_id', None) is None:
+        return ':' not in (i.name or '')
+    n = db.session.get(Node, i.node_id)
+    return bool(n is not None and getattr(n, 'enabled', True))
+
+
+def _rs_set_enabled(p, enable):
+    """Enable / disable a peer of either kind; returns (code, body).
+    Enabling never resets usage or the timer."""
+    iface = getattr(p, 'iface', None)
+    nid = getattr(iface, 'node_id', None)
+    if nid is not None:
+        if enable:
+            return _rs_internal(node_enable_peer, f'/api/nodes/{nid}/peer/{p.public_key}/enable',
+                                {'reset': False}, nid=nid, pub=p.public_key)
+        return _rs_internal(node_disable_peer, f'/api/nodes/{nid}/peer/{p.public_key}/disable',
+                            {}, nid=nid, pub=p.public_key)
+    if enable:
+        return _rs_internal(api_enable, f'/api/peer/{p.id}/enable', {'reset': False}, pid=p.id)
+    return _rs_internal(api_disable, f'/api/peer/{p.id}/disable', {}, pid=p.id)
+
+
 @app.get('/api/agent/me')
 @reseller_required
 def agent_me():
@@ -35109,9 +35408,9 @@ def agent_me():
     d = _rs_public(r)
     ifaces = []
     for i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(r.iface_ids() or [-1])).all():
-        if getattr(i, 'node_id', None):
+        if not _rs_iface_usable(i):
             continue
-        ifaces.append({'id': i.id, 'name': i.name})
+        ifaces.append({'id': i.id, 'name': _rs_iface_label(i)})
     d['ifaces'] = ifaces
     d['months'] = list(_RS_MONTHS)
     d['tests_used_24h'] = _rs_tests_last_24h(r)
@@ -35139,8 +35438,9 @@ def agent_peers():
     counts = {'all': 0, 'online': 0, 'active': 0, 'disabled': 0, 'blocked': 0, 'expired': 0, 'unused': 0}
     match_ids = []
     # interface device names once (p.iface was one extra query per user)
-    devs = {}
+    devs, node_ifaces = {}, {}
     for _i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(r.iface_ids() or [-1])).all():
+        node_ifaces[_i.id] = getattr(_i, 'node_id', None) is not None
         try:
             devs[_i.id] = iface_devname(_i)
         except Exception:
@@ -35156,7 +35456,10 @@ def agent_peers():
             dev = devs.get(p.iface_id)
             if dev is None:
                 dev = devs[p.iface_id] = iface_devname(p.iface)
-            ent = (dump.get(dev) or {}).get(p.public_key)
+            if node_ifaces.get(p.iface_id, getattr(p.iface, 'node_id', None) is not None):
+                ent = _wg_runtime_entry(p)          # node runtime snapshot
+            else:
+                ent = (dump.get(dev) or {}).get(p.public_key)
             hs = int(ent[0] or 0) if ent else 0
         except Exception:
             pass
@@ -35291,7 +35594,7 @@ def _agent_create_peer_locked():
     if not iface_id and len(allowed) == 1:
         iface_id = allowed[0]
     iface = db.session.get(InterfaceConfig, iface_id) if iface_id in allowed else None
-    if iface is None or getattr(iface, 'node_id', None):
+    if not _rs_iface_usable(iface):
         return jsonify(ok=False, error='iface_not_allowed', detail='این سرور برای شما مجاز نیست'), 403
     if r.max_users and Peer.query.filter(Peer.reseller_id == r.id).count() >= r.max_users:
         return jsonify(ok=False, error='max_users', detail=f'سقف تعداد کاربر شما ({r.max_users}) پر شده'), 403
@@ -35332,6 +35635,9 @@ def _agent_create_peer_locked():
         'time_limit_days': days, 'start_on_first_use': bool(first_use and not test),
         'unlimited': False,
     }
+    if getattr(iface, 'node_id', None) is not None:
+        payload.update({'scope': 'node', 'node_id': iface.node_id, 'iface_name': _rs_iface_remote(iface)})
+        payload.pop('iface_id', None)
     ep = _rs_client_endpoint(iface)
     if ep:
         payload['endpoint'] = ep
@@ -35414,8 +35720,12 @@ def agent_renew_peer(pid):
     usage_before = (p.bytes_offset, p.used_bytes_total)
     if p.data_limit_value or new_gb:
         try:
-            _wg_dump_invalidate()
-            p.bytes_offset = max(0, int(_wg_transfer(p) or 0))
+            if _peer_is_on_node(p):
+                _e = _node_rt_entry(p, max_age=0, allow_heavy=True)
+                p.bytes_offset = max(0, int(_e[2] or 0) + int(_e[3] or 0)) if _e else int(p.bytes_offset or 0)
+            else:
+                _wg_dump_invalidate()
+                p.bytes_offset = max(0, int(_wg_transfer(p) or 0))
         except Exception:
             pass
         p.used_bytes_total = 0
@@ -35463,11 +35773,11 @@ def agent_toggle_peer(pid):
         if not (p.status == 'offline' and _rs_last_flag_event(p) == 'reseller_disabled'):
             return jsonify(ok=False, error='not_allowed',
                            detail='این کاربر توسط مدیر یا سیستم غیرفعال شده و فقط مدیر می‌تواند فعالش کند'), 403
-        code, body = _rs_internal(api_enable, f'/api/peer/{p.id}/enable', {'reset': False}, pid=p.id)
+        code, body = _rs_set_enabled(p, True)
     else:
         if p.status != 'online':
             return jsonify(ok=False, error='not_active', detail='کاربر فعال نیست'), 409
-        code, body = _rs_internal(api_disable, f'/api/peer/{p.id}/disable', {}, pid=p.id)
+        code, body = _rs_set_enabled(p, False)
         if code < 400:
             try:
                 log_event(db.session.get(Peer, pid), 'reseller_disabled', f'by reseller {r.username}')
@@ -35771,7 +36081,7 @@ def _rs_apply_fields(r, data, creating=False):
             except (TypeError, ValueError):
                 pass
         valid = {i.id for i in InterfaceConfig.query.filter(InterfaceConfig.id.in_(ids or [-1])).all()
-                 if not getattr(i, 'node_id', None)}
+                 if _rs_iface_usable(i)}
         r.allowed_ifaces = ','.join(str(i) for i in ids if i in valid)
 
 
@@ -35779,8 +36089,8 @@ def _rs_apply_fields(r, data, creating=False):
 @_admin_only
 def api_resellers_list():
     rows = [_rs_public(r) for r in Reseller.query.order_by(Reseller.id.asc()).all()]
-    ifaces = [{'id': i.id, 'name': i.name} for i in InterfaceConfig.query.order_by(InterfaceConfig.id).all()
-              if not getattr(i, 'node_id', None)]
+    ifaces = [{'id': i.id, 'name': _rs_iface_label(i)} for i in InterfaceConfig.query.order_by(InterfaceConfig.id).all()
+              if _rs_iface_usable(i)]
     return jsonify(ok=True, resellers=rows, ifaces=ifaces)
 
 
@@ -35917,7 +36227,7 @@ def api_resellers_suspend_users(rid):
         if suspend:
             if p.status != 'online':
                 continue
-            code, _b = _rs_internal(api_disable, f'/api/peer/{p.id}/disable', {}, pid=p.id)
+            code, _b = _rs_set_enabled(p, False)
             if code < 400:
                 try:
                     log_event(db.session.get(Peer, p.id), 'reseller_suspended', f'agent {r.username} suspended by admin')
@@ -35929,7 +36239,7 @@ def api_resellers_suspend_users(rid):
         else:
             if p.status != 'offline' or _rs_last_flag_event(p) != 'reseller_suspended':
                 continue
-            code, _b = _rs_internal(api_enable, f'/api/peer/{p.id}/enable', {'reset': False}, pid=p.id)
+            code, _b = _rs_set_enabled(p, True)
             if code < 400:
                 done += 1
             else:

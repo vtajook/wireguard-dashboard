@@ -429,6 +429,47 @@ def _route(cmd, cidr):
     except Exception:
         pass
 
+@app.get('/api/runtime')
+@require_api_key
+def runtime_light():
+    """Cheap runtime snapshot for the panel's background jobs (expiry and
+    data-limit enforcement, single-user detection, traffic statistics).
+    One `wg show all dump` + interface byte counters; no ping probes.
+
+    peers:  {public_key: [iface, latest_handshake, rx_bytes, tx_bytes, endpoint]}
+    ifaces: {iface: [rx_bytes, tx_bytes]}
+    """
+    peers, ifaces = {}, {}
+    try:
+        dump = subprocess.check_output(
+            ['wg', 'show', 'all', 'dump'],
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+        ).decode('utf-8', 'replace').splitlines()
+    except Exception as exc:
+        return jsonify(ok=False, error='wg_dump_failed', detail=str(exc)[:200]), 500
+    for line in dump:
+        parts = line.split('\t')
+        if len(parts) == 9:
+            try:
+                hs, rx, tx = int(parts[5] or 0), int(parts[6] or 0), int(parts[7] or 0)
+            except (TypeError, ValueError):
+                hs = rx = tx = 0
+            ep = (parts[3] or '').strip()
+            peers[parts[1]] = [parts[0], hs, rx, tx, '' if ep == '(none)' else ep]
+        elif len(parts) == 5:
+            dev = parts[0]
+            try:
+                with open(f'/sys/class/net/{dev}/statistics/rx_bytes') as fh:
+                    rx = int(fh.read().strip() or 0)
+                with open(f'/sys/class/net/{dev}/statistics/tx_bytes') as fh:
+                    tx = int(fh.read().strip() or 0)
+                ifaces[dev] = [rx, tx]
+            except Exception:
+                pass
+    return jsonify(ok=True, ts=int(time.time()), peers=peers, ifaces=ifaces)
+
+
 @app.route('/api/health')
 @require_api_key
 def health():

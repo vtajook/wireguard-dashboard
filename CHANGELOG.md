@@ -3,6 +3,38 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — nodes get every feature (2.3.0)
+
+Everything that worked only on the main server now works on nodes too.
+
+- **Resellers on nodes**: node interfaces can be given to resellers (shown as
+  "node name / wg0"). Agents create, renew, top up, enable / disable, change
+  link, delete and bulk-delete node users exactly like local ones.
+- **Fast paging on nodes**: the peers page pages, filters and sorts node
+  lists on the server too (the node list is read at most every 8 s instead
+  of on every refresh).
+- **Expiry and data limits on nodes run in the background**: node usage and
+  first use were only saved while someone had the node's peer list open, so
+  data limits and first-use timers were not enforced otherwise. The
+  enforcer now reads every node each cycle.
+- **Renewed node users come back online**: a node user blocked for time or
+  data stayed blocked after renewal; it is unblocked automatically now
+  (same as local users). Single-user penalties on nodes also end on time.
+- **Single-user (one device per config) on nodes**.
+- **Users' traffic card includes node traffic**.
+- **Change link on nodes**: new keys on the node, same address / usage.
+- Node "Enable" no longer wipes usage and restarts the timer (the panel sends
+  reset=false, same fix as local peers had).
+- Node renewals reset usage from the node's real counter (before: from 0,
+  which could count the whole counter as usage).
+- Node peer create (legacy route): decimal GB (2.5) failed; stored as MiB.
+- The global config domain applies to the main server only; agent users on a
+  node copy that node's usual endpoint.
+- Node agent: new cheap `GET /api/runtime` (one `wg show all dump` + interface
+  counters, no pings). Update nodes from Update Center → nodes. Single-user
+  and the traffic card need it; expiry / limits also work with older agents.
+- README: how to install and connect a node.
+
 ## 2026-11-20 — second full check: subscriptions, traffic control, nodes, bot (2.2.8)
 
 Reviewed the remaining parts: multi-location subscriptions (admin and

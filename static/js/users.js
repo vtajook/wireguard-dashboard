@@ -6380,7 +6380,13 @@
       () => prompt("Expired at least how many days ago? (0 = all)", "0"),
     );
     if (days == null || days === false) return;
-    const older = Number(String(days === true ? "0" : days).trim() || 0);
+    // Persian / Arabic digits from a Persian keyboard
+    const daysLatin = String(days === true ? "0" : days)
+      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+      .replace(/٫/g, ".")
+      .trim();
+    const older = Number(daysLatin || 0);
     if (!Number.isFinite(older) || older < 0) {
       toastSafe("Enter 0 or a positive number of days.", "error");
       return;
@@ -6449,7 +6455,10 @@
         })
       : Promise.resolve(prompt("New prefix (e.g. 20)", "20")));
     if (val == null || val === false || val === "") return;
-    const prefix = Number(String(val).replace("/", "").trim());
+    const prefix = Number(String(val)
+      .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+      .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+      .replace("/", "").trim());
     if (!Number.isInteger(prefix) || prefix < 16 || prefix > 30) {
       toastSafe("Prefix must be a number between 16 and 30.", "error");
       return;

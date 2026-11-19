@@ -3,6 +3,13 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — Persian digits in number prompts (2.2.5)
+
+- "Delete expired" (days) and "Subnet prefix" accepted only English digits;
+  numbers typed on a Persian keyboard (۳، ۲۰) were rejected. Converted now.
+- Removed a duplicate `?v=` from the agent / resellers asset links (the panel
+  already adds a version to every static file).
+
 ## 2026-11-20 — agent API fixes (2.2.4)
 
 - Agent create: parallel requests (e.g. a bot sending many at once) could

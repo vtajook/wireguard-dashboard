@@ -940,10 +940,11 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = ["<b>Admins</b>"]
     for a in rows:
-        u = f"@{a['username']}" if a.get("username") else ""
+        # escaped: a "<" or "&" in a note made Telegram reject the message
+        u = f"@{html(str(a['username']))}" if a.get("username") else ""
         mute = "○" if a.get("muted") else "●"
-        note = f" — {a.get('note','')}" if a.get("note") else ""
-        lines.append(f"• <code>{a['id']}</code> {u} {mute}{note}")
+        note = f" — {html(str(a.get('note', '')))}" if a.get("note") else ""
+        lines.append(f"• <code>{html(str(a['id']))}</code> {u} {mute}{note}")
     await update.message.reply_html("\n".join(lines))
 
 @admin_only
@@ -7020,9 +7021,13 @@ async def wizard_bulk_node(update: Update):
     await edit_send(update, "Select node for bulk:", InlineKeyboardMarkup(rows))
 
 
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩٫", "01234567890123456789.")
+
+
 @admin_only
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (update.message.text or "").strip()
+    # numbers typed on a Persian keyboard (۱۰، ۲٫۵) are read as 10, 2.5
+    text = (update.message.text or "").strip().translate(_FA_DIGITS)
 
 
     # Security control

@@ -3,6 +3,24 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — second full check: subscriptions, traffic control, nodes, bot (2.2.8)
+
+Reviewed the remaining parts: multi-location subscriptions (admin and
+public page), traffic control (domain / IP / country blocking), the node
+agent, the Telegram bot menus and the user-page templates.
+
+- Telegram bot: numbers typed on a Persian keyboard (۱۰، ۲٫۵) in any bot
+  prompt (days, GB, counts…) are read as 10, 2.5.
+- Telegram bot: /admins failed when an admin note contained "<" or "&"
+  (Telegram rejected the message); names and notes are escaped now.
+- Removed `install-gui.sh` and the `installer/` folder: an old leftover whose
+  program file was missing, so it could never start (and it would have run
+  an unauthenticated root web page on port 8888). Use install.sh.
+- Checked and fine: traffic-control rules only accept validated IPs /
+  networks / country codes (nothing user-typed reaches nftables), the public
+  subscription page escapes every name, the node agent requires its API key
+  on every route.
+
 ## 2026-11-20 — full source check (2.2.7)
 
 Whole source checked with static analysis (ruff for Python, eslint for the

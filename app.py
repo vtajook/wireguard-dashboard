@@ -35714,7 +35714,9 @@ def api_resellers_list():
 @_admin_only
 def api_resellers_create():
     data = request.get_json(silent=True) or {}
-    r = Reseller(balance=0, session_ver=1)
+    # random start: SQLite reuses the id of a deleted reseller, and a login
+    # cookie of the deleted one (rs_id + rs_ver=1) must not open the new one
+    r = Reseller(balance=0, session_ver=secrets.randbelow(2**30) + 2)
     try:
         _rs_apply_fields(r, data, creating=True)
     except ValueError as exc:
@@ -35768,6 +35770,9 @@ def api_resellers_delete(rid):
     r = db.session.get(Reseller, rid) or abort(404)
     name = r.username
     n = Peer.query.filter(Peer.reseller_id == r.id).update({Peer.reseller_id: None}, synchronize_session=False)
+    # the ledger goes with the account: a new reseller can get the same id
+    # and must not inherit its transactions, test quota or spending
+    ResellerTxn.query.filter(ResellerTxn.reseller_id == r.id).delete(synchronize_session=False)
     db.session.delete(r)
     db.session.commit()
     _RS_NAME_MEMO['ts'] = 0
@@ -35857,7 +35862,7 @@ def api_resellers_suspend_users(rid):
                 failed += 1
     _wg_dump_invalidate()
     logpanel_action('reseller_suspend_users', f'reseller={r.username}; suspend={int(suspend)}; done={done}; failed={failed}')
-    return jsonify(ok=not failed, done=done, failed=failed)
+    return jsonify(ok=True, done=done, failed=failed)
 
 
 

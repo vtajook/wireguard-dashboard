@@ -173,19 +173,29 @@
           okText: "Apply",
         });
         if (v == null || v === false || String(v).trim() === "") return;
-        const amount = Number(String(v).replace(/[, ]/g, ""));
+        // Persian / Arabic digits and separators from a Persian keyboard
+        const latin = String(v)
+          .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+          .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+          .replace(/[−–]/g, "-");
+        const amount = Number(latin.replace(/[,،٬\s]/g, ""));
         if (!Number.isFinite(amount) || amount === 0) return say("Enter a number like 500000 or -50000", "error");
         const j = await api(`/api/resellers/${r.id}/charge`, { method: "POST", body: JSON.stringify({ amount }) });
         say(`${r.username}: wallet is now ${num(j.balance)}`, "success");
       } else if (act === "suspend") {
-        const v = await promptBox({
-          title: `Users of ${r.username}`,
-          body: 'Type "off" to disable all active users of this reseller, or "on" to re-enable the users that were disabled this way.',
-          value: "off",
-          okText: "Apply",
-        });
-        if (!v || !["on", "off"].includes(String(v).trim().toLowerCase())) return;
-        const suspend = String(v).trim().toLowerCase() === "off";
+        // two plain confirmations instead of typing "on" / "off"
+        let suspend = null;
+        if (await confirmBox({
+          title: `Disable users of ${r.username}`,
+          body: "Disable all active users of this reseller? Press Cancel if you want to re-enable users instead.",
+          okText: "Disable all",
+        })) suspend = true;
+        else if (await confirmBox({
+          title: `Re-enable users of ${r.username}`,
+          body: "Re-enable the users of this reseller that were disabled with “Users on/off”?",
+          okText: "Re-enable",
+        })) suspend = false;
+        if (suspend === null) return;
         b.disabled = true;
         const j = await api(`/api/resellers/${r.id}/suspend_users`, { method: "POST", body: JSON.stringify({ suspend }) });
         say(`${suspend ? "Disabled" : "Re-enabled"} ${j.done} users${j.failed ? `, ${j.failed} failed` : ""}`, j.failed ? "warning" : "success");

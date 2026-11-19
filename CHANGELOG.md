@@ -3,6 +3,20 @@
 The built-in updater, installer and `wgpanel` CLI pull from this repository
 (`vtajook/wireguard-dashboard`). Set `WG_PANEL_REPO=owner/repo` in `.env` to use another one.
 
+## 2026-11-20 — resellers page fixes (2.2.3)
+
+- Security: a new reseller could be opened with the login cookie of a
+  deleted reseller (SQLite reuses the deleted id and both started at session
+  version 1). New resellers start at a random session version.
+- Deleting a reseller also deletes its wallet ledger, so a new reseller that
+  gets the same id does not inherit old transactions, test quota or spending.
+- Charge: amounts typed with Persian digits (۵۰۰۰۰۰) or Persian separators
+  were rejected; they are converted now.
+- "Users on/off" no longer asks you to type "on" / "off": two plain
+  confirmations (disable all, or re-enable).
+- "Users on/off": when a few users failed, the result showed only as an
+  error; it shows "done / failed" now.
+
 ## 2026-11-20 — agent panel fixes (2.2.2)
 
 - Agent dialogs: an empty number box showed in confirm dialogs (delete,

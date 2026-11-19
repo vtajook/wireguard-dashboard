@@ -8,6 +8,9 @@ The built-in updater, installer and `wgpanel` CLI pull from this repository
 - Agent create: parallel requests (e.g. a bot sending many at once) could
   all pass the daily test quota and the max-users limit together. Creates of
   one agent now run one at a time (file lock, works across workers).
+- install.sh on an existing git install: the remote is set to this
+  repository first, so an older install that still points at another
+  repository is not reset to that one.
 - Agent users list: one database query per user was made to find its
   interface; interfaces are read once now (faster for agents with many
   users).

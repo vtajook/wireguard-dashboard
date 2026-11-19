@@ -40,6 +40,9 @@ FRESH=0
 if [ -f "$PANEL_DIR/app.py" ]; then
   green "==> Existing panel found in $PANEL_DIR — updating code"
   if [ -d "$PANEL_DIR/.git" ]; then
+    # an older install may still point at another repository
+    git -C "$PANEL_DIR" remote set-url origin "$REPO_URL" 2>/dev/null \
+      || git -C "$PANEL_DIR" remote add origin "$REPO_URL"
     git -C "$PANEL_DIR" fetch --depth 1 origin "$BRANCH"
     git -C "$PANEL_DIR" reset --hard "origin/$BRANCH"
   else

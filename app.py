@@ -35146,6 +35146,8 @@ def agent_peers():
         if flt in tags or (flt not in counts):
             match_ids.append(p.id)
     total = len(match_ids)
+    # after deleting the last users of the last page, show the new last page
+    page = min(page, max(1, -(-total // per)))
     page_ids = match_ids[(page - 1) * per: page * per]
     peers = Peer.query.filter(Peer.id.in_(page_ids or [-1])).all()
     peers.sort(key=lambda x: page_ids.index(x.id))

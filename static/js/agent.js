@@ -166,6 +166,7 @@
     const q = encodeURIComponent($("#u-q").value.trim());
     const j = await api(`/api/agent/peers?page=${page}&per=50&q=${q}&status=${status}`);
     if (j.counts) document.querySelectorAll("#u-filters [data-c]").forEach((el) => (el.textContent = fa(j.counts[el.dataset.c] || 0)));
+    if (Number(j.page) && Number(j.page) !== page) page = Number(j.page);
     $("#u-total").textContent = fa(j.total) + " کاربر";
     const pages = Math.max(1, Math.ceil(j.total / j.per));
     $("#u-page").textContent = fa(page) + " / " + fa(pages);
@@ -191,7 +192,7 @@
           <div class="num">${remaining(p)}</div>
           <div class="num">${usage}</div>
           <div class="acts">
-            <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes ? Math.round(p.limit_bytes / 1073741824) : 0}">تمدید</button>
+            <button class="ag-btn sm primary" data-act="renew" data-id="${p.id}" data-name="${esc(p.name)}" data-gb="${p.limit_bytes >= 1073741824 ? Math.round((p.limit_bytes / 1073741824) * 10) / 10 : 0}">تمدید</button>
             ${p.limit_bytes ? `<button class="ag-btn sm" data-act="topup" data-id="${p.id}" data-name="${esc(p.name)}">افزودن</button>` : ""}
             ${p.link ? `<a class="ag-ico" href="${esc(p.link)}" target="_blank" rel="noopener" title="باز کردن ساب (صفحهٔ کاربر)"><i class="fas fa-up-right-from-square"></i><span>ساب</span></a><button class="ag-ico" data-act="link" data-link="${esc(p.link)}" title="کپی لینک ساب"><i class="fas fa-link"></i><span>کپی لینک</span></button>` : ""}
             <button class="ag-ico" data-act="qr" data-id="${p.id}" data-name="${esc(p.name)}" title="QR کانفیگ"><i class="fas fa-qrcode"></i><span>QR</span></button>

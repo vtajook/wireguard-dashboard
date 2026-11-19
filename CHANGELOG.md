@@ -7,6 +7,11 @@ The built-in updater, installer and `wgpanel` CLI pull from this repository
 
 - "Delete expired" (days) and "Subnet prefix" accepted only English digits;
   numbers typed on a Persian keyboard (۳، ۲۰) were rejected. Converted now.
+- Agent create form: decimal GB (e.g. 2.5) was blocked by the browser; the
+  box accepts 0.1 GB steps now. Renew suggests the user's current volume
+  with one decimal (tests under 1 GB suggest the default instead of 0).
+- Agent list: after deleting the last users of the last page the list said
+  "no users"; it now shows the new last page.
 - Removed a duplicate `?v=` from the agent / resellers asset links (the panel
   already adds a version to every static file).
 
